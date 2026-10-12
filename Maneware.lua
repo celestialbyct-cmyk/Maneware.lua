@@ -8,6 +8,7 @@ local TweenService = game:GetService("TweenService")
 local Lighting = game:GetService("Lighting")
 local StarterGui = game:GetService("StarterGui")
 local VirtualUser = game:GetService("VirtualUser")
+local HttpService = game:GetService("HttpService")
 local LocalPlayer = Players.LocalPlayer
 local Camera = workspace.CurrentCamera
 workspace:GetPropertyChangedSignal("CurrentCamera"):Connect(function() Camera = workspace.CurrentCamera end)
@@ -90,6 +91,29 @@ end
 --------------------------------------------------
 -- ГЛАВНОЕ ОКНО
 --------------------------------------------------
+local function addRow(holder, order, label, actions)
+    local row = new("Frame", {Size = UDim2.new(1, 0, 0, 46), BackgroundColor3 = C.ELEMENT,
+        BorderSizePixel = 0, LayoutOrder = order}, holder)
+    corner(10, row)
+    new("UIStroke", {Color = C.BORDER, Thickness = 1}, row)
+    local right = 8
+    for idx = #actions, 1, -1 do
+        local a = actions[idx]
+        local w = a.w or 76
+        local b = new("TextButton", {Size = UDim2.new(0, w, 0, 32), Position = UDim2.new(1, -(right + w), 0.5, -16),
+            BackgroundColor3 = a.color or C.ACCENT, Text = a.text, TextColor3 = C.TEXT, TextSize = 12,
+            Font = Enum.Font.GothamBold, BorderSizePixel = 0}, row)
+        corner(8, b)
+        onTap(b, function() task.spawn(a.fn) end)
+        right = right + w + 6
+    end
+    new("TextLabel", {Size = UDim2.new(1, -(right + 12), 1, 0), Position = UDim2.new(0, 12, 0, 0),
+        BackgroundTransparency = 1, Text = label, TextColor3 = C.TEXT, TextSize = 13,
+        Font = Enum.Font.GothamSemibold, TextXAlignment = Enum.TextXAlignment.Left,
+        TextTruncate = Enum.TextTruncate.AtEnd}, row)
+    return row
+end
+
 local hubGui = makeGui("ManewareHub", 9999)
 local FULL = UDim2.new(0.9, 0, 0.85, 0)
 local main = new("Frame", {Size = UDim2.new(0, 0, 0, 0), Position = UDim2.new(0.5, 0, 0.5, 0),
@@ -102,7 +126,7 @@ tw(main, 0.4, {Size = FULL})
 local topbar = new("Frame", {Size = UDim2.new(1, 0, 0, 55), BackgroundColor3 = C.TOPBAR, BorderSizePixel = 0, Active = true}, main)
 createIcon(ICONS.MENU, UDim2.new(0, 24, 0, 24), topbar).Position = UDim2.new(0, 15, 0.5, -12)
 new("TextLabel", {Size = UDim2.new(0.6, 0, 1, 0), Position = UDim2.new(0, 50, 0, 0), BackgroundTransparency = 1,
-    Text = "Maneware | MM2 v3", TextColor3 = C.TEXT, TextSize = 16, Font = Enum.Font.GothamBold,
+    Text = "Maneware | MM2 v6", TextColor3 = C.TEXT, TextSize = 16, Font = Enum.Font.GothamBold,
     TextXAlignment = Enum.TextXAlignment.Left}, topbar)
 local closeBtn = new("TextButton", {Size = UDim2.new(0, 40, 0, 40), Position = UDim2.new(1, -48, 0.5, -20),
     BackgroundColor3 = C.RED, Text = "✕", TextColor3 = C.TEXT, TextSize = 18, Font = Enum.Font.GothamBold,
@@ -140,6 +164,7 @@ local content = new("Frame", {Size = UDim2.new(1, -140, 1, -55), Position = UDim
 --------------------------------------------------
 -- ВКЛАДКИ / ЭЛЕМЕНТЫ
 --------------------------------------------------
+local REG = {} -- реестр: имя настройки -> get/set (для конфигов)
 local tabs, activeTab = {}, nil
 
 local function addTab(name, icon)
@@ -209,16 +234,26 @@ local function addTab(name, icon)
             Position = state and UDim2.new(1, -25, 0.5, -11) or UDim2.new(0, 3, 0.5, -11),
             BackgroundColor3 = Color3.new(1, 1, 1), BorderSizePixel = 0}, bg)
         corner(11, dot)
-        onTap(el, function()
-            state = not state
+        local function apply(v)
+            state = v and true or false
             tw(bg, 0.2, {BackgroundColor3 = state and C.ACCENT or Color3.fromRGB(55, 55, 70)})
             tw(dot, 0.2, {Position = state and UDim2.new(1, -25, 0.5, -11) or UDim2.new(0, 3, 0.5, -11)})
             if callback then task.spawn(callback, state) end
-        end)
+        end
+        onTap(el, function() apply(not state) end)
+        REG[text] = {get = function() return state end, set = apply}
     end
 
-    function T.Slider(text, min, max, default, suffix, callback)
+    function T.Slider(text, min, max, default, suffix, callback, step)
+        step = step or 1
         local value = default or min
+        local function fmt(v)
+            if step >= 1 then return tostring(v) end
+            return string.format("%.2f", v)
+        end
+        local function snap(x)
+            return tonumber(string.format("%.3f", math.clamp(math.floor(x / step + 0.5) * step, min, max)))
+        end
         local el = new("Frame", {Size = UDim2.new(1, -8, 0, 76), BackgroundColor3 = C.ELEMENT, BorderSizePixel = 0}, page)
         corner(10, el)
         new("UIStroke", {Color = C.BORDER, Thickness = 1}, el)
@@ -226,7 +261,7 @@ local function addTab(name, icon)
             Text = text, TextColor3 = C.TEXT, TextSize = 13, Font = Enum.Font.GothamSemibold,
             TextXAlignment = Enum.TextXAlignment.Left}, el)
         local val = new("TextLabel", {Size = UDim2.new(0.35, -14, 0, 25), Position = UDim2.new(0.65, 0, 0, 8),
-            BackgroundTransparency = 1, Text = value .. (suffix or ""), TextColor3 = C.ACCENT, TextSize = 13,
+            BackgroundTransparency = 1, Text = fmt(value) .. (suffix or ""), TextColor3 = C.ACCENT, TextSize = 13,
             Font = Enum.Font.GothamBold, TextXAlignment = Enum.TextXAlignment.Right}, el)
         local bar = new("TextButton", {Size = UDim2.new(1, -28, 0, 14), Position = UDim2.new(0, 14, 0, 48),
             BackgroundColor3 = Color3.fromRGB(45, 45, 60), Text = "", AutoButtonColor = false, BorderSizePixel = 0}, el)
@@ -241,11 +276,21 @@ local function addTab(name, icon)
         local sliding = false
         local function update(input)
             local rel = math.clamp((input.Position.X - bar.AbsolutePosition.X) / bar.AbsoluteSize.X, 0, 1)
-            value = math.floor(min + (max - min) * rel + 0.5)
-            fill.Size = UDim2.new(rel, 0, 1, 0)
-            val.Text = value .. (suffix or "")
+            value = snap(min + (max - min) * rel)
+            fill.Size = UDim2.new((value - min) / (max - min), 0, 1, 0)
+            val.Text = fmt(value) .. (suffix or "")
             if callback then callback(value) end
         end
+        REG[text] = {
+            get = function() return value end,
+            set = function(v)
+                v = snap(tonumber(v) or min)
+                value = v
+                fill.Size = UDim2.new((v - min) / (max - min), 0, 1, 0)
+                val.Text = fmt(v) .. (suffix or "")
+                if callback then callback(v) end
+            end,
+        }
         bar.InputBegan:Connect(function(i)
             if i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.Touch then
                 sliding = true
@@ -306,6 +351,23 @@ local function addTab(name, icon)
         Players.PlayerAdded:Connect(function() task.wait(0.3) refresh() end)
         Players.PlayerRemoving:Connect(function() task.wait(0.3) refresh() end)
         return refresh
+    end
+
+    function T.TextBox(placeholder)
+        local el = new("Frame", {Size = UDim2.new(1, -8, 0, 46), BackgroundColor3 = C.ELEMENT, BorderSizePixel = 0}, page)
+        corner(10, el)
+        new("UIStroke", {Color = C.BORDER, Thickness = 1}, el)
+        return new("TextBox", {Size = UDim2.new(1, -20, 1, 0), Position = UDim2.new(0, 10, 0, 0),
+            BackgroundTransparency = 1, Text = "", PlaceholderText = placeholder, PlaceholderColor3 = C.DIM,
+            TextColor3 = C.TEXT, TextSize = 14, Font = Enum.Font.GothamSemibold, ClearTextOnFocus = false,
+            TextXAlignment = Enum.TextXAlignment.Left}, el)
+    end
+
+    function T.Holder()
+        local holder = new("Frame", {Size = UDim2.new(1, -8, 0, 0), AutomaticSize = Enum.AutomaticSize.Y,
+            BackgroundTransparency = 1}, page)
+        new("UIListLayout", {Padding = UDim.new(0, 6), SortOrder = Enum.SortOrder.LayoutOrder}, holder)
+        return holder
     end
 
     return T
@@ -480,32 +542,53 @@ local function removeTarget()
     if targetConn then targetConn:Disconnect() targetConn = nil end
     if targetObj then targetObj:Destroy() targetObj = nil end
 end
+
+-- Настройки Target ESP (glow, размер, скорость вращения)
+local tgt = {glow = true, size = 0.5, speed = 1.0}
+
+-- Плоская рамка из 4 красных уголков (как на фото), крепится к телу цели
+local function buildReticle()
+    local bb = new("BillboardGui", {Name = "MWTargetBB", Size = UDim2.new(3, 0, 3, 0), AlwaysOnTop = true,
+        LightInfluence = 0, Enabled = false})
+    local spin = new("Frame", {Size = UDim2.new(1, 0, 1, 0), BackgroundTransparency = 1, Rotation = 25}, bb)
+    local glow = new("Frame", {Size = UDim2.new(1, 0, 1, 0), BackgroundTransparency = 1}, spin)
+    local core = new("Frame", {Size = UDim2.new(1, 0, 1, 0), BackgroundTransparency = 1}, spin)
+    local function corners(parent, color, thick, transp, len)
+        for _, a in ipairs({Vector2.new(0, 0), Vector2.new(1, 0), Vector2.new(0, 1), Vector2.new(1, 1)}) do
+            new("Frame", {Size = UDim2.new(len, 0, 0, thick), Position = UDim2.new(a.X, 0, a.Y, 0), AnchorPoint = a,
+                BackgroundColor3 = color, BackgroundTransparency = transp, BorderSizePixel = 0}, parent)
+            new("Frame", {Size = UDim2.new(0, thick, len, 0), Position = UDim2.new(a.X, 0, a.Y, 0), AnchorPoint = a,
+                BackgroundColor3 = color, BackgroundTransparency = transp, BorderSizePixel = 0}, parent)
+        end
+    end
+    corners(glow, Color3.fromRGB(255, 40, 80), 8, 0.7, 0.36)  -- свечение (Glow)
+    corners(core, Color3.fromRGB(255, 70, 100), 3, 0, 0.34)   -- основные уголки
+    return bb, spin, glow
+end
+
 local function applyTarget()
     removeTarget()
     if not targetEspEnabled then return end
-    local part = new("Part", {Name = "MWTarget", Size = Vector3.new(1.5, 1.5, 1.5), Anchored = true,
-        CanCollide = false, Transparency = 1}, workspace)
-    new("BoxHandleAdornment", {Adornee = part, Size = part.Size, Color3 = C.GREEN, Transparency = 0.85,
-        AlwaysOnTop = true, ZIndex = 1}, part)
-    new("SelectionBox", {Adornee = part, Color3 = Color3.fromRGB(50, 255, 50), LineThickness = 0.06,
-        SurfaceTransparency = 1}, part)
-    targetObj = part
-    local angle = 0
+    local bb, spin, glow = buildReticle()
+    targetObj = bb
+    local angle = 25
     targetConn = RunService.RenderStepped:Connect(function(dt)
-        if not targetEspEnabled or not part.Parent then removeTarget() return end
-        local shown = false
-        if isGameActive() then
-            local p = findByRole("Murderer")
-            local ch = p and p.Character
-            local r = ch and ch:FindFirstChild("HumanoidRootPart")
-            local h = ch and ch:FindFirstChildOfClass("Humanoid")
-            if r and h and h.Health > 0 then
-                angle += dt * 50
-                part.CFrame = CFrame.new(r.Position + Vector3.new(0, 3.5, 0)) * CFrame.Angles(0, math.rad(angle), 0)
-                shown = true
-            end
+        if not targetEspEnabled then removeTarget() return end
+        local pl = isGameActive() and findByRole("Murderer", true) or nil
+        local ch = pl and pl.Character
+        local r = ch and ch:FindFirstChild("HumanoidRootPart")
+        local h = ch and ch:FindFirstChildOfClass("Humanoid")
+        if r and h and h.Health > 0 then
+            if bb.Parent ~= r then bb.Parent = r end
+            local sz = 6 * tgt.size
+            bb.Size = UDim2.new(sz, 0, sz, 0)
+            glow.Visible = tgt.glow
+            bb.Enabled = true
+            angle += dt * 70 * tgt.speed
+            spin.Rotation = angle % 360
+        else
+            bb.Enabled = false
         end
-        part.Transparency = shown and 0 or 1
     end)
 end
 
@@ -529,20 +612,58 @@ local function clearByName(names)
     end
 end
 
+local gunDropRef = nil
+local function isGunDropName(n) return n == "GunDrop" or n == "GunDrop2" end
+workspace.DescendantAdded:Connect(function(d)
+    if isGunDropName(d.Name) then gunDropRef = d end
+end)
+local lastGunScan = 0
+local function findGunDrop()
+    if gunDropRef and gunDropRef.Parent then return gunDropRef end
+    gunDropRef = nil
+    if os.clock() - lastGunScan < 1 then return nil end
+    lastGunScan = os.clock()
+    gunDropRef = workspace:FindFirstChild("GunDrop", true)
+    return gunDropRef
+end
+local function gunDropPart(g)
+    if not g then return nil end
+    if g:IsA("BasePart") then return g end
+    return g:FindFirstChildWhichIsA("BasePart", true)
+end
+local gunNotified = nil
+
 task.spawn(function()
     while true do
-        task.wait(0.7)
+        task.wait(0.5)
         pcall(function()
             if gunEsp then
-                local g = workspace:FindFirstChild("GunDrop")
-                if g and g:IsA("BasePart") and not g:FindFirstChild("MWGun") then
-                    new("Highlight", {Name = "MWGun", Adornee = g, FillColor = Color3.fromRGB(255, 200, 0),
-                        OutlineColor = Color3.new(1, 1, 1), FillTransparency = 0.3}, g)
-                    local bb = new("BillboardGui", {Name = "MWGunTag", Size = UDim2.new(5, 0, 2, 0),
-                        StudsOffset = Vector3.new(0, 2, 0), AlwaysOnTop = true}, g)
-                    new("TextLabel", {Size = UDim2.new(1, 0, 1, 0), BackgroundTransparency = 1, Text = "🔫 ПИСТОЛЕТ",
-                        TextColor3 = Color3.fromRGB(255, 200, 0), TextStrokeTransparency = 0, TextScaled = true,
-                        Font = Enum.Font.GothamBold}, bb)
+                local g = findGunDrop()
+                local part = gunDropPart(g)
+                if part then
+                    if gunNotified ~= g then
+                        gunNotified = g
+                        notify("🔫 Пистолет выпал!")
+                    end
+                    if not part:FindFirstChild("MWGunBox") then
+                        new("BoxHandleAdornment", {Name = "MWGunBox", Adornee = part,
+                            Size = part.Size + Vector3.new(0.6, 0.6, 0.6), Color3 = Color3.fromRGB(255, 200, 0),
+                            Transparency = 0.3, AlwaysOnTop = true, ZIndex = 1}, part)
+                    end
+                    if not part:FindFirstChild("MWGun") then
+                        new("Highlight", {Name = "MWGun", Adornee = part, FillColor = Color3.fromRGB(255, 200, 0),
+                            OutlineColor = Color3.new(1, 1, 1), FillTransparency = 0.2,
+                            DepthMode = Enum.HighlightDepthMode.AlwaysOnTop}, part)
+                    end
+                    if not part:FindFirstChild("MWGunTag") then
+                        local bb = new("BillboardGui", {Name = "MWGunTag", Size = UDim2.new(0, 120, 0, 36),
+                            StudsOffset = Vector3.new(0, 2.5, 0), AlwaysOnTop = true}, part)
+                        new("TextLabel", {Size = UDim2.new(1, 0, 1, 0), BackgroundTransparency = 1,
+                            Text = "🔫 ПИСТОЛЕТ", TextColor3 = Color3.fromRGB(255, 200, 0), TextStrokeTransparency = 0,
+                            TextSize = 18, Font = Enum.Font.GothamBold}, bb)
+                    end
+                else
+                    gunNotified = nil
                 end
             end
             if coinEsp then
@@ -700,17 +821,44 @@ local function isVisible(targetChar)
     return workspace:Raycast(origin, head.Position - origin, params) == nil
 end
 
-local function predictPos(hrp)
+-- Трекер реальной скорости игроков (точнее, чем AssemblyLinearVelocity)
+local vTrack = setmetatable({}, {__mode = "k"})
+RunService.Heartbeat:Connect(function(dt)
+    for _, pl in ipairs(Players:GetPlayers()) do
+        local r = pl.Character and pl.Character:FindFirstChild("HumanoidRootPart")
+        if r then
+            local d = vTrack[r]
+            if not d then
+                vTrack[r] = {pos = r.Position, vel = Vector3.zero}
+            else
+                if dt > 0 then d.vel = d.vel:Lerp((r.Position - d.pos) / dt, 0.4) end
+                d.pos = r.Position
+            end
+        end
+    end
+end)
+
+local function predictAt(hrp, speed, strength)
     local pos = hrp.Position
-    if not aim.predict then return pos end
     local my = myHrp()
-    local dist = my and (pos - my.Position).Magnitude or 0
+    local d = vTrack[hrp]
+    local vel = d and d.vel or hrp.AssemblyLinearVelocity
+    if vel.Magnitude > 60 then vel = vel.Unit * 60 end -- отсекаем рывки/телепорты
+    vel = Vector3.new(vel.X, vel.Y * 0.3, vel.Z)
     local ping = 0
     pcall(function() ping = LocalPlayer:GetNetworkPing() end)
-    local t = ping + dist / BULLET_SPEED
-    local vel = hrp.AssemblyLinearVelocity
-    vel = Vector3.new(vel.X, vel.Y * 0.5, vel.Z)
-    return pos + vel * t * (aim.strength / 100)
+    local origin = my and my.Position or Camera.CFrame.Position
+    local predicted = pos
+    for _ = 1, 3 do -- время полёта зависит от точки упреждения, уточняем итерациями
+        local t = (predicted - origin).Magnitude / speed + ping
+        predicted = pos + vel * t * strength
+    end
+    return predicted
+end
+
+local function predictPos(hrp)
+    if not aim.predict then return hrp.Position end
+    return predictAt(hrp, BULLET_SPEED, aim.strength / 100)
 end
 
 -- ВАЖНО: ремоут пистолета может меняться после обновлений MM2.
@@ -781,9 +929,9 @@ end
 
 local function doGrabGun()
     if grabBusy or flingBusy then return end
-    local g = workspace:FindFirstChild("GunDrop")
+    local g = findGunDrop()
     if not g then return end
-    local part = g:IsA("BasePart") and g or g:FindFirstChildWhichIsA("BasePart", true)
+    local part = gunDropPart(g)
     if not part then return end
     -- берём только если шериф мёртв (пистолет выпал) и у нас пистолета нет
     if sheriffAlive() or hasGun() or getRole(LocalPlayer) == "Murderer" then return end
@@ -900,6 +1048,520 @@ local function flingRole(role)
     if pl then flingPlayer(pl) else notify(role .. " не найден") end
 end
 
+--------------------------------------------------
+-- НОЖ: удар / бросок, KillAura, Kill All, Aura Throw
+--------------------------------------------------
+local farmBusy = false
+local killAllOn, killAllBusy = false, false
+
+local function amMurderer() return getRole(LocalPlayer) == "Murderer" end
+
+local function getKnife(equip)
+    local c = myChar()
+    if not c then return nil end
+    local k = c:FindFirstChild("Knife")
+    if k then return k end
+    local bp = LocalPlayer:FindFirstChild("Backpack")
+    local kb = bp and bp:FindFirstChild("Knife")
+    if kb and equip then
+        local h = myHum()
+        if h then
+            h:EquipTool(kb)
+            task.wait(0.15)
+        end
+        return c:FindFirstChild("Knife")
+    end
+    return nil
+end
+
+-- можно ли убить игрока (жив, есть персонаж, нет ForceField)
+local function canKill(pl)
+    if not pl or pl == LocalPlayer then return false end
+    local ch = pl.Character
+    local hum = ch and ch:FindFirstChildOfClass("Humanoid")
+    local r = ch and ch:FindFirstChild("HumanoidRootPart")
+    if not hum or not r or hum.Health <= 0 then return false end
+    if ch:FindFirstChildOfClass("ForceField") then return false end
+    return true, r
+end
+
+-- ВАЖНО: имена ремоутов ножа могут меняться после обновлений MM2
+local function stab(targetRoot)
+    local knife = getKnife(true)
+    if not knife then return false end
+    local handle = knife:FindFirstChild("Handle")
+    local st = knife:FindFirstChild("Stab")
+    if st and st:IsA("RemoteEvent") then
+        pcall(function() st:FireServer("Slash") end)
+    else
+        pcall(function() knife:Activate() end)
+    end
+    if handle and targetRoot and firetouchinterest then
+        pcall(function()
+            firetouchinterest(handle, targetRoot, 0)
+            firetouchinterest(handle, targetRoot, 1)
+        end)
+    end
+    return true
+end
+
+local function nearestPlayer(maxDist)
+    local my = myHrp()
+    if not my then return nil end
+    local best, bd = nil, maxDist
+    for _, pl in ipairs(Players:GetPlayers()) do
+        local ok, r = canKill(pl)
+        if ok then
+            local d = (r.Position - my.Position).Magnitude
+            if d <= bd then best, bd = pl, d end
+        end
+    end
+    return best
+end
+
+-- KillAura: бьёт ножом (не бросает) всех в радиусе, только если ты убийца
+local ka = {on = false, dist = 4, last = 0}
+RunService.Heartbeat:Connect(function()
+    if not ka.on or killAllBusy or flingBusy or os.clock() - ka.last < 0.25 then return end
+    if not amMurderer() then return end
+    local my = myHrp()
+    if not my then return end
+    for _, pl in ipairs(Players:GetPlayers()) do
+        local ok, r = canKill(pl)
+        if ok and (r.Position - my.Position).Magnitude <= ka.dist then
+            ka.last = os.clock()
+            task.spawn(stab, r)
+            break
+        end
+    end
+end)
+
+-- Kill All: по очереди телепортируется к каждому и бьёт, потом возвращается назад
+task.spawn(function()
+    while true do
+        task.wait(0.4)
+        if killAllOn and not killAllBusy and not flingBusy and not grabBusy and not farmBusy and amMurderer() then
+            killAllBusy = true
+            pcall(function()
+                local my = myHrp()
+                if not my then return end
+                local origin = my.CFrame
+                local list = {}
+                for _, pl in ipairs(Players:GetPlayers()) do
+                    local ok, r = canKill(pl)
+                    if ok then table.insert(list, {pl = pl, d = (r.Position - my.Position).Magnitude}) end
+                end
+                table.sort(list, function(a, b) return a.d < b.d end)
+                for _, e in ipairs(list) do
+                    if not killAllOn or not amMurderer() then break end
+                    local t0 = os.clock()
+                    while os.clock() - t0 < 1.5 and killAllOn do
+                        local ok, r = canKill(e.pl)
+                        local h = myHrp()
+                        if not ok or not h then break end
+                        h.CFrame = r.CFrame * CFrame.new(0, 0, 2.5)
+                        h.AssemblyLinearVelocity = Vector3.zero
+                        stab(r)
+                        task.wait(0.2)
+                    end
+                end
+                local h = myHrp()
+                if h then
+                    h.CFrame = origin
+                    h.AssemblyLinearVelocity = Vector3.zero
+                end
+            end)
+            killAllBusy = false
+        end
+    end
+end)
+
+-- Aura Throw: бросок ножа с сильным упреждением
+local thr = {on = false, range = 80, cd = 1.2, strength = 100, last = 0}
+local THROW_SPEED = 130
+
+local function hasKnife()
+    local c = myChar()
+    if c and c:FindFirstChild("Knife") then return true end
+    local bp = LocalPlayer:FindFirstChild("Backpack")
+    return bp ~= nil and bp:FindFirstChild("Knife") ~= nil
+end
+
+-- перебираем все ремоуты ножа с "throw" в имени (Throw, KnifeThrown и т.п.)
+local function fireKnifeThrow(knife, hand, pos)
+    local cands = {}
+    local tr = knife:FindFirstChild("Throw")
+    if tr then table.insert(cands, tr) end
+    for _, d in ipairs(knife:GetDescendants()) do
+        if d ~= tr and (d:IsA("RemoteEvent") or d:IsA("RemoteFunction")) and d.Name:lower():find("throw") then
+            table.insert(cands, d)
+        end
+    end
+    local sent = false
+    for _, r in ipairs(cands) do
+        if r:IsA("RemoteEvent") then
+            if pcall(function() r:FireServer(CFrame.new(hand), CFrame.new(pos)) end) then sent = true end
+        elseif r:IsA("RemoteFunction") then
+            task.spawn(function() pcall(function() r:InvokeServer(CFrame.new(hand), CFrame.new(pos)) end) end)
+            sent = true
+        end
+    end
+    return sent
+end
+
+local function throwAt(pl)
+    local ok, r = canKill(pl)
+    if not ok then return false end
+    local knife = getKnife(true)
+    local c = myChar()
+    local my = myHrp()
+    if not knife or not c or not my then return false end
+    local pos = predictAt(r, THROW_SPEED, thr.strength / 100)
+    local hand = (c:FindFirstChild("RightHand") or my).Position
+    return fireKnifeThrow(knife, hand, pos)
+end
+
+RunService.Heartbeat:Connect(function()
+    if not thr.on or flingBusy or os.clock() - thr.last < thr.cd then return end
+    if not hasKnife() then return end
+    local pl = nearestPlayer(thr.range)
+    if pl then
+        thr.last = os.clock()
+        task.spawn(throwAt, pl)
+    end
+end)
+
+--------------------------------------------------
+-- AUTOFARM МОНЕТ
+--------------------------------------------------
+local farm = {on = false, speed = 30, limit = 40, flingMurd = false, reset = false, walls = true,
+    safe = 0, count = 0, done = false}
+local coinSkip = setmetatable({}, {__mode = "k"})
+local lastContainer, cachedCC, lastCCScan, lastFarmWarn = nil, nil, 0, 0
+
+-- контейнер монет ищем по всему workspace (карта может лежать где угодно)
+local function findCoinContainer()
+    if cachedCC and cachedCC.Parent then return cachedCC end
+    cachedCC = nil
+    if os.clock() - lastCCScan < 0.8 then return nil end
+    lastCCScan = os.clock()
+    cachedCC = workspace:FindFirstChild("CoinContainer", true)
+    return cachedCC
+end
+
+local function coinPart(c)
+    if c:IsA("BasePart") then return c end
+    return c:FindFirstChildWhichIsA("BasePart", true)
+end
+local function hasTouch(c) return c:FindFirstChildWhichIsA("TouchInterest", true) ~= nil end
+
+-- ближайшая нетронутая монета; если у монет есть TouchInterest - берём только с ним
+local function nearestCoin(cc, my)
+    local items = cc:GetChildren()
+    local useTouch = false
+    for _, c in ipairs(items) do
+        if hasTouch(c) then useTouch = true break end
+    end
+    local murd = findByRole("Murderer", true)
+    local mr = murd and murd.Character and murd.Character:FindFirstChild("HumanoidRootPart")
+    local best, bestPart, bd = nil, nil, math.huge
+    for _, c in ipairs(items) do
+        local part = coinPart(c)
+        if part and c.Parent and not c:GetAttribute("Collected") and (not useTouch or hasTouch(c)) then
+            local skip = coinSkip[c]
+            if not skip or os.clock() > skip then
+                local blocked = farm.safe > 0 and mr and (mr.Position - part.Position).Magnitude < farm.safe
+                if not blocked then
+                    local d = (part.Position - my.Position).Magnitude
+                    if d < bd then best, bestPart, bd = c, part, d end
+                end
+            end
+        end
+    end
+    return best, bestPart, useTouch
+end
+
+local function coinGone(c, hadTouch)
+    if not c.Parent then return true end
+    if c:GetAttribute("Collected") then return true end
+    if hadTouch and not hasTouch(c) then return true end
+    return false
+end
+
+-- считываем реальное число монет из интерфейса (если путь есть), иначе считаем сами
+local function readBag()
+    local ok, n = pcall(function()
+        local lbl = LocalPlayer.PlayerGui.MainGUI.Game.CoinBags.Container.Coin.CurrencyFrame.Icon.Coins
+        return tonumber(lbl.Text)
+    end)
+    return ok and n or nil
+end
+
+-- летим к монете напрямую (сквозь препятствия) со скоростью из слайдера
+local function flyTo(part, coin)
+    local h0 = myHrp()
+    if not h0 then return false end
+    local limit = (part.Position - h0.Position).Magnitude / math.max(farm.speed, 1) + 3
+    local t0 = os.clock()
+    while farm.on and coin.Parent and os.clock() - t0 < limit do
+        local h = myHrp()
+        if not h then return false end
+        local dt = RunService.Heartbeat:Wait()
+        local diff = part.Position - h.Position
+        local dist = diff.Magnitude
+        if dist < 0.8 then return true end
+        local step = farm.speed * dt
+        if step >= dist then
+            h.CFrame = CFrame.new(part.Position) * h.CFrame.Rotation
+        else
+            h.CFrame = h.CFrame + diff.Unit * step
+        end
+        h.AssemblyLinearVelocity = Vector3.zero
+        h.AssemblyAngularVelocity = Vector3.zero
+    end
+    return false
+end
+
+local function farmLimitReached()
+    farm.done = true
+    if farm.flingMurd then
+        local m = findByRole("Murderer", true)
+        if m then flingPlayer(m) end
+    end
+    if farm.reset then
+        local h = myHum()
+        if h then
+            h.Health = 0
+            pcall(function() myChar():BreakJoints() end)
+        end
+    end
+end
+
+task.spawn(function()
+    while true do
+        task.wait(0.12)
+        if farm.on and not farmBusy and not grabBusy and not flingBusy and not killAllBusy then
+            farmBusy = true
+            local ok, err = pcall(function()
+                local cc = findCoinContainer()
+                if cc ~= lastContainer then -- новый раунд / новая карта
+                    lastContainer = cc
+                    farm.count = 0
+                    farm.done = false
+                end
+                if not cc then
+                    if os.clock() - lastFarmWarn > 15 then
+                        lastFarmWarn = os.clock()
+                        notify("Автофарм: монеты не найдены (раунд не начался?)")
+                    end
+                    return
+                end
+                if farm.done then return end
+                local my, hum = myHrp(), myHum()
+                if not my or not hum or hum.Health <= 0 then return end
+                if farm.count > 0 then
+                    local bag = readBag()
+                    if bag then farm.count = bag end
+                end
+                if farm.count >= farm.limit then
+                    farmLimitReached()
+                    return
+                end
+                if farm.walls and not noclipEnabled then toggleNoclip(true) end
+                local coin, part, hadTouch = nearestCoin(cc, my)
+                if not coin then return end
+                if flyTo(part, coin) then
+                    local got = false
+                    local t0 = os.clock()
+                    while os.clock() - t0 < 0.7 do
+                        local h = myHrp()
+                        if not h then break end
+                        h.CFrame = CFrame.new(part.Position) * h.CFrame.Rotation -- стоим на монете
+                        h.AssemblyLinearVelocity = Vector3.zero
+                        if firetouchinterest then
+                            pcall(function()
+                                firetouchinterest(h, part, 0)
+                                firetouchinterest(h, part, 1)
+                            end)
+                        end
+                        if coinGone(coin, hadTouch) then got = true break end
+                        task.wait(0.06)
+                    end
+                    if got then farm.count += 1 else coinSkip[coin] = os.clock() + 8 end
+                else
+                    coinSkip[coin] = os.clock() + 8
+                end
+            end)
+            if not ok then warn("[Maneware] autofarm: " .. tostring(err)) end
+            farmBusy = false
+        end
+    end
+end)
+
+--------------------------------------------------
+-- KILL EFFECTS: эффекты, когда умирает убийца / шериф
+--------------------------------------------------
+local fx = {ghost = false, lightning = false, star = false, starCount = 5, starSpeed = 2}
+
+-- 1) Ghost: полупрозрачная копия игрока плавно поднимается вверх и исчезает
+local function spawnGhost(ch)
+    if not ch then return end
+    local wasArch = ch.Archivable
+    ch.Archivable = true
+    local clone = ch:Clone()
+    ch.Archivable = wasArch
+    if not clone then return end
+    local kill = {}
+    for _, d in ipairs(clone:GetDescendants()) do
+        if d:IsA("BaseScript") or d:IsA("Humanoid") or d:IsA("BillboardGui") or d:IsA("Sound")
+            or d:IsA("Highlight") or d:IsA("ForceField") or d:IsA("Tool") or d:IsA("SurfaceAppearance") then
+            table.insert(kill, d)
+        end
+    end
+    for _, d in ipairs(kill) do pcall(function() d:Destroy() end) end
+    local parts, decals = {}, {}
+    for _, d in ipairs(clone:GetDescendants()) do
+        if d:IsA("BasePart") then
+            d.Anchored = true
+            d.CanCollide = false
+            d.CanTouch = false
+            d.CanQuery = false
+            d.CastShadow = false
+            d.Material = Enum.Material.Neon
+            d.Color = Color3.fromRGB(190, 225, 255)
+            d.Transparency = 0.45
+            pcall(function() d.TextureID = "" end)
+            table.insert(parts, d)
+        elseif d:IsA("Decal") or d:IsA("Texture") then
+            d.Transparency = 0.5
+            table.insert(decals, d)
+        end
+    end
+    clone.Name = "MWGhost"
+    clone.Parent = workspace
+    local base = clone:GetPivot()
+    local dur, t0 = 2.6, os.clock()
+    local conn
+    conn = RunService.Heartbeat:Connect(function()
+        local a = (os.clock() - t0) / dur
+        if a >= 1 or not clone.Parent then
+            conn:Disconnect()
+            clone:Destroy()
+            return
+        end
+        clone:PivotTo(base + Vector3.new(math.sin(a * 6) * 0.3, 8 * a, 0))
+        local tr = 0.45 + 0.55 * a * a
+        for _, pt in ipairs(parts) do pt.Transparency = tr end
+        for _, dc in ipairs(decals) do dc.Transparency = 0.5 + 0.5 * a end
+    end)
+end
+
+-- 2) Molnia: молния в стиле Minecraft бьёт в место смерти
+local function spawnLightning(pos)
+    local folder = new("Folder", {Name = "MWLightning"}, workspace)
+    local ground = pos - Vector3.new(0, 2.5, 0)
+    local top = ground + Vector3.new(math.random(-6, 6), 120, math.random(-6, 6))
+    local pts = {top}
+    local segs = 16
+    for i = 1, segs - 1 do
+        local a = i / segs
+        local p = top:Lerp(ground, a)
+        local off = (1 - a) * 8 + 1
+        pts[#pts + 1] = p + Vector3.new((math.random() - 0.5) * off * 2, 0, (math.random() - 0.5) * off * 2)
+    end
+    pts[#pts + 1] = ground
+    local parts = {}
+    local function bolt(p1, p2, thick)
+        local d = p2 - p1
+        if d.Magnitude < 0.05 then return end
+        parts[#parts + 1] = new("Part", {Anchored = true, CanCollide = false, CanTouch = false, CanQuery = false,
+            CastShadow = false, Material = Enum.Material.Neon, Color = Color3.fromRGB(210, 225, 255),
+            Size = Vector3.new(thick, thick, d.Magnitude), CFrame = CFrame.lookAt(p1 + d / 2, p2)}, folder)
+    end
+    for i = 1, #pts - 1 do bolt(pts[i], pts[i + 1], 0.7) end
+    local prev = pts[math.random(5, 9)] -- ответвление
+    for _ = 1, 4 do
+        local np = prev + Vector3.new((math.random() - 0.5) * 14, -(8 + math.random() * 6), (math.random() - 0.5) * 14)
+        bolt(prev, np, 0.35)
+        prev = np
+    end
+    local flash = new("Part", {Shape = Enum.PartType.Ball, Size = Vector3.new(6, 6, 6), Position = ground,
+        Anchored = true, CanCollide = false, CanTouch = false, CanQuery = false, CastShadow = false,
+        Material = Enum.Material.Neon, Color = Color3.new(1, 1, 1), Transparency = 0.3}, folder)
+    task.spawn(function()
+        local function setT(t)
+            for _, pt in ipairs(parts) do pt.Transparency = t end
+            flash.Transparency = math.min(1, t + 0.3)
+        end
+        setT(0) task.wait(0.09)
+        setT(1) task.wait(0.05)
+        setT(0) task.wait(0.12)
+        for i = 1, 10 do
+            setT(i / 10)
+            task.wait(0.03)
+        end
+        folder:Destroy()
+    end)
+end
+
+-- 3) Star: звёзды выходят из тела, медленно идут вверх и исчезают
+local function spawnStars(pos)
+    local spd = math.clamp(fx.starSpeed, 1, 5)
+    local dur = 6 / spd + 0.5
+    for _ = 1, fx.starCount do
+        task.delay(math.random() * 0.6, function()
+            local start = pos + Vector3.new((math.random() - 0.5) * 2.5, math.random() * 2 - 0.5, (math.random() - 0.5) * 2.5)
+            local part = new("Part", {Anchored = true, CanCollide = false, CanTouch = false, CanQuery = false,
+                Transparency = 1, Size = Vector3.new(0.2, 0.2, 0.2), Position = start}, workspace)
+            local bb = new("BillboardGui", {Size = UDim2.new(1.4, 0, 1.4, 0), AlwaysOnTop = true, LightInfluence = 0}, part)
+            local tl = new("TextLabel", {Size = UDim2.new(1, 0, 1, 0), BackgroundTransparency = 1, Text = "★",
+                TextScaled = true, TextColor3 = Color3.fromRGB(255, 230, 90), TextStrokeTransparency = 0.6,
+                TextStrokeColor3 = Color3.fromRGB(255, 170, 0), Font = Enum.Font.GothamBold}, bb)
+            TweenService:Create(part, TweenInfo.new(dur, Enum.EasingStyle.Sine, Enum.EasingDirection.Out),
+                {Position = start + Vector3.new((math.random() - 0.5) * 3, 9, (math.random() - 0.5) * 3)}):Play()
+            TweenService:Create(tl, TweenInfo.new(dur, Enum.EasingStyle.Quad, Enum.EasingDirection.In),
+                {TextTransparency = 1, TextStrokeTransparency = 1}):Play()
+            task.delay(dur + 0.1, function() part:Destroy() end)
+        end)
+    end
+end
+
+local function fxDeath(ch, pos)
+    if fx.ghost then pcall(spawnGhost, ch) end
+    if fx.lightning then pcall(spawnLightning, pos) end
+    if fx.star then pcall(spawnStars, pos) end
+end
+
+-- запоминаем роль, пока игрок жив (после смерти инвентарь уже пуст)
+local roleCache = {}
+task.spawn(function()
+    while true do
+        task.wait(0.25)
+        for _, pl in ipairs(Players:GetPlayers()) do
+            local h = pl.Character and pl.Character:FindFirstChildOfClass("Humanoid")
+            if h and h.Health > 0 then roleCache[pl] = getRole(pl) end
+        end
+    end
+end)
+Players.PlayerRemoving:Connect(function(pl) roleCache[pl] = nil end)
+
+local function hookDeath(pl)
+    local function onChar(ch)
+        local hum = ch:WaitForChild("Humanoid", 5)
+        if not hum then return end
+        hum.Died:Connect(function()
+            local role = roleCache[pl]
+            if role ~= "Murderer" and role ~= "Sheriff" then return end
+            local hrp = ch:FindFirstChild("HumanoidRootPart")
+            if hrp then fxDeath(ch, hrp.Position) end
+        end)
+    end
+    if pl.Character then task.spawn(onChar, pl.Character) end
+    pl.CharacterAdded:Connect(onChar)
+end
+for _, pl in ipairs(Players:GetPlayers()) do hookDeath(pl) end
+Players.PlayerAdded:Connect(hookDeath)
+
 LocalPlayer.CharacterAdded:Connect(function(c)
     task.wait(0.5)
     if hatEnabled then applyHat(c) end
@@ -944,8 +1606,13 @@ t2.Toggle("Подсветка ролей (ESP)", false, function(v)
 end, ICONS.EYE)
 t2.Toggle("ESP пистолета (выпал)", false, function(v)
     gunEsp = v
-    if not v then clearByName({MWGun = true, MWGunTag = true}) end
+    if not v then clearByName({MWGun = true, MWGunTag = true, MWGunBox = true}) end
 end, ICONS.GUN)
+t2.Button("🔍 Где пистолет? (диагностика)", function()
+    local g = findGunDrop()
+    if g then notify("GunDrop: " .. g:GetFullName() .. " [" .. g.ClassName .. "]")
+    else notify("GunDrop не найден (пистолет не выпал?)") end
+end)
 t2.Toggle("ESP монет", false, function(v)
     coinEsp = v
     if not v then clearByName({MWCoin = true}) end
@@ -954,6 +1621,9 @@ t2.Toggle("Target ESP (Убийца)", false, function(v)
     targetEspEnabled = v
     if v then applyTarget() else removeTarget() end
 end, ICONS.TARGET)
+t2.Toggle("Target: Glow (свечение)", true, function(v) tgt.glow = v end, ICONS.TARGET)
+t2.Slider("Target: Size", 0.10, 1, 0.5, "", function(v) tgt.size = v end, 0.05)
+t2.Slider("Target: Speed", 0.50, 2, 1.00, "x", function(v) tgt.speed = v end, 0.05)
 t2.Toggle("China Hat", false, function(v)
     hatEnabled = v
     if v then applyHat(myChar()) else removeHat() end
@@ -995,6 +1665,140 @@ local refreshList
 t6.Button("🔄 Обновить список", function() if refreshList then refreshList() end end)
 refreshList = t6.PlayerList("FLING", flingPlayer)
 
+-- Автофарм
+local t7 = addTab("Автофарм", ICONS.COIN)
+t7.Section("💰 Autofarm монет")
+t7.Toggle("Autofarm", false, function(v)
+    farm.on = v
+    if not v then toggleNoclip(noclipUser or flyEnabled) end
+end, ICONS.COIN)
+t7.Slider("Скорость фарма", 16, 50, 30, " st/s", function(v) farm.speed = v end)
+t7.Slider("Лимит монет (мешок)", 10, 60, 40, "", function(v) farm.limit = v end)
+t7.Toggle("Fling Murderer после лимита", false, function(v) farm.flingMurd = v end, ICONS.FLING)
+t7.Toggle("Reset после лимита", false, function(v) farm.reset = v end, ICONS.UTIL)
+t7.Toggle("Лететь сквозь стены (NoClip)", true, function(v) farm.walls = v end, ICONS.NOCLIP)
+t7.Slider("Обходить монеты рядом с убийцей", 0, 40, 0, " st", function(v) farm.safe = v end)
+t7.Button("Сбросить счётчик монет", function()
+    farm.count = 0
+    farm.done = false
+    notify("Счётчик сброшен")
+end)
+
+-- Убийца
+local t8 = addTab("Убийца", ICONS.AIM)
+t8.Section("🔪 KillAura (только если ты убийца)")
+t8.Toggle("KillAura (бьёт ножом)", false, function(v) ka.on = v end, ICONS.AIM)
+t8.Slider("Дистанция KillAura", 1, 6, 4, " st", function(v) ka.dist = v end)
+t8.Toggle("Kill All (убить всех)", false, function(v) killAllOn = v end, ICONS.TARGET)
+t8.Section("🗡 Aura Throw (бросок ножа)")
+t8.Toggle("Aura Throw (авто-бросок в ближнего)", false, function(v) thr.on = v end, ICONS.AIM)
+t8.Slider("Дальность броска", 10, 200, 80, " st", function(v) thr.range = v end)
+t8.Slider("Сила упреждения броска", 0, 200, 100, "%", function(v) thr.strength = v end)
+t8.Slider("Задержка между бросками", 5, 30, 12, " ×0.1с", function(v) thr.cd = v / 10 end)
+t8.Button("Бросить в ближнего", function()
+    local pl = nearestPlayer(thr.range)
+    if not pl then notify("Нет цели") return end
+    if not throwAt(pl) then notify("Нож не найден / ты не убийца") end
+end)
+t8.Section("🎯 Бросить в выбранного")
+t8.PlayerList("БРОСИТЬ", function(pl)
+    if not throwAt(pl) then notify("Не удалось бросить") end
+end)
+
+-- KillEffect
+local t10 = addTab("KillEffect", ICONS.TARGET)
+t10.Section("💀 Эффекты при смерти убийцы / шерифа")
+t10.Toggle("Ghost (призрак поднимается)", false, function(v) fx.ghost = v end, ICONS.EYE)
+t10.Toggle("Molnia (молния в месте смерти)", false, function(v) fx.lightning = v end, ICONS.AIM)
+t10.Toggle("Star (звёзды из тела)", false, function(v) fx.star = v end, ICONS.TARGET)
+t10.Slider("Star: количество", 1, 10, 5, "", function(v) fx.starCount = v end)
+t10.Slider("Star: скорость", 1, 5, 2, "", function(v) fx.starSpeed = v end)
+t10.Button("▶ Проверить эффекты (на мне)", function()
+    local h, ch = myHrp(), myChar()
+    if not h or not ch then return end
+    if not (fx.ghost or fx.lightning or fx.star) then notify("Включи хотя бы один эффект") return end
+    fxDeath(ch, h.Position)
+end)
+
+-- Configs
+local t9 = addTab("Configs", ICONS.UTIL)
+t9.Section("💾 Конфиги (сохранение настроек)")
+local cfgName = t9.TextBox("Имя конфига")
+local CFG_DIR = "ManewareMM2"
+local cfgHolder
+local activeCfg = nil -- последний загруженный/сохранённый конфиг
+
+local function cleanName(n)
+    n = tostring(n or ""):gsub("[/\\:%*%?\"<>|]", ""):gsub("^%s+", ""):gsub("%s+$", "")
+    return n
+end
+local function cfgSupported()
+    return writefile ~= nil and readfile ~= nil and isfolder ~= nil and makefolder ~= nil and listfiles ~= nil
+end
+local function cfgSave(name)
+    name = cleanName(name)
+    if name == "" then notify("Введи имя конфига") return end
+    if not cfgSupported() then notify("Executor не поддерживает файлы") return end
+    pcall(function() if not isfolder(CFG_DIR) then makefolder(CFG_DIR) end end)
+    local data = {}
+    for key, e in pairs(REG) do data[key] = e.get() end
+    local ok = pcall(function()
+        writefile(CFG_DIR .. "/" .. name .. ".json", HttpService:JSONEncode(data))
+    end)
+    if ok then activeCfg = name end
+    notify(ok and ("Сохранено: " .. name) or "Ошибка сохранения")
+end
+local function cfgLoad(name)
+    local ok, data = pcall(function()
+        return HttpService:JSONDecode(readfile(CFG_DIR .. "/" .. name .. ".json"))
+    end)
+    if not ok or type(data) ~= "table" then notify("Не удалось загрузить") return end
+    for key, val in pairs(data) do
+        local e = REG[key]
+        if e then pcall(e.set, val) end
+    end
+    activeCfg = name
+    notify("Загружен: " .. name)
+end
+local function cfgDelete(name)
+    pcall(function() delfile(CFG_DIR .. "/" .. name .. ".json") end)
+end
+local function cfgRefresh()
+    if not cfgHolder then return end
+    for _, ch in ipairs(cfgHolder:GetChildren()) do
+        if ch:IsA("Frame") then ch:Destroy() end
+    end
+    if not cfgSupported() then return end
+    local names = {}
+    pcall(function()
+        if not isfolder(CFG_DIR) then return end
+        for _, f in ipairs(listfiles(CFG_DIR)) do
+            local n = tostring(f):match("([^/\\]+)%.json$")
+            if n then table.insert(names, n) end
+        end
+    end)
+    table.sort(names)
+    for i, n in ipairs(names) do
+        addRow(cfgHolder, i, n, {
+            {text = "✕", color = C.RED, w = 34, fn = function() cfgDelete(n) cfgRefresh() end},
+            {text = "Save", color = C.ACCENT, w = 50, fn = function() cfgSave(n) end},
+            {text = "Load", color = C.GREEN, w = 50, fn = function() cfgLoad(n) end},
+        })
+    end
+end
+t9.Button("💾 Сохранить конфиг (по имени выше)", function()
+    cfgSave(cfgName.Text)
+    cfgRefresh()
+end)
+t9.Button("💾 Сохранить в открытый конфиг", function()
+    if not activeCfg then notify("Сначала загрузи или сохрани конфиг") return end
+    cfgSave(activeCfg)
+end)
+t9.Button("🔄 Обновить список", cfgRefresh)
+t9.Section("📂 Сохранённые конфиги")
+cfgHolder = t9.Holder()
+cfgRefresh()
+
 --------------------------------------------------
 -- ПЛАВАЮЩАЯ КНОПКА
 --------------------------------------------------
@@ -1012,12 +1816,12 @@ local function setMenu(show)
     end
 end
 
-local fab = new("TextButton", {Size = UDim2.new(0, 64, 0, 64), Position = UDim2.new(1, -84, 0.5, -32),
+local fab = new("TextButton", {Size = UDim2.new(0, 42, 0, 42), Position = UDim2.new(1, -56, 0.5, -21),
     BackgroundColor3 = C.ACCENT, Text = "", AutoButtonColor = false, BorderSizePixel = 0, ZIndex = 10}, toggleGui)
-corner(32, fab)
-new("UIStroke", {Color = Color3.new(1, 1, 1), Thickness = 3}, fab)
-local fabIcon = createIcon(ICONS.MENU, UDim2.new(0, 34, 0, 34), fab)
-fabIcon.Position = UDim2.new(0.5, -17, 0.5, -17)
+corner(21, fab)
+new("UIStroke", {Color = Color3.new(1, 1, 1), Thickness = 2}, fab)
+local fabIcon = createIcon(ICONS.MENU, UDim2.new(0, 22, 0, 22), fab)
+fabIcon.Position = UDim2.new(0.5, -11, 0.5, -11)
 fabIcon.ImageColor3 = Color3.new(1, 1, 1)
 fabIcon.ZIndex = 11
 
@@ -1049,4 +1853,4 @@ UIS.InputBegan:Connect(function(i, gpe)
     if i.KeyCode == Enum.KeyCode.Insert or i.KeyCode == Enum.KeyCode.RightControl then setMenu(not menuVisible) end
 end)
 
-print("[Maneware] v3 загружен")
+print("[Maneware] v6 загружен")
