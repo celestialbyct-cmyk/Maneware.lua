@@ -10,6 +10,7 @@ local StarterGui = game:GetService("StarterGui")
 local VirtualUser = game:GetService("VirtualUser")
 local LocalPlayer = Players.LocalPlayer
 local Camera = workspace.CurrentCamera
+workspace:GetPropertyChangedSignal("CurrentCamera"):Connect(function() Camera = workspace.CurrentCamera end)
 
 local C = {
     BG = Color3.fromRGB(18, 18, 24), SIDEBAR = Color3.fromRGB(24, 24, 32),
@@ -38,6 +39,7 @@ local ICONS = {
     COIN   = "rbxassetid://10709752035",
     SHIELD = "rbxassetid://10723346871",
     UTIL   = "rbxassetid://10723407389",
+    FLING  = "rbxassetid://10723354359",
 }
 
 local function resolveIcon(id, name)
@@ -100,7 +102,7 @@ tw(main, 0.4, {Size = FULL})
 local topbar = new("Frame", {Size = UDim2.new(1, 0, 0, 55), BackgroundColor3 = C.TOPBAR, BorderSizePixel = 0, Active = true}, main)
 createIcon(ICONS.MENU, UDim2.new(0, 24, 0, 24), topbar).Position = UDim2.new(0, 15, 0.5, -12)
 new("TextLabel", {Size = UDim2.new(0.6, 0, 1, 0), Position = UDim2.new(0, 50, 0, 0), BackgroundTransparency = 1,
-    Text = "Maneware | MM2 v2", TextColor3 = C.TEXT, TextSize = 16, Font = Enum.Font.GothamBold,
+    Text = "Maneware | MM2 v3", TextColor3 = C.TEXT, TextSize = 16, Font = Enum.Font.GothamBold,
     TextXAlignment = Enum.TextXAlignment.Left}, topbar)
 local closeBtn = new("TextButton", {Size = UDim2.new(0, 40, 0, 40), Position = UDim2.new(1, -48, 0.5, -20),
     BackgroundColor3 = C.RED, Text = "✕", TextColor3 = C.TEXT, TextSize = 18, Font = Enum.Font.GothamBold,
@@ -273,6 +275,39 @@ local function addTab(name, icon)
         onTap(el, function() if callback then task.spawn(callback) end end)
     end
 
+    -- Список игроков: у каждого своя кнопка действия
+    function T.PlayerList(actionText, callback)
+        local holder = new("Frame", {Size = UDim2.new(1, -8, 0, 0), AutomaticSize = Enum.AutomaticSize.Y,
+            BackgroundTransparency = 1}, page)
+        new("UIListLayout", {Padding = UDim.new(0, 6), SortOrder = Enum.SortOrder.LayoutOrder}, holder)
+        local function refresh()
+            for _, ch in ipairs(holder:GetChildren()) do
+                if ch:IsA("Frame") then ch:Destroy() end
+            end
+            for i, pl in ipairs(Players:GetPlayers()) do
+                if pl ~= LocalPlayer then
+                    local row = new("Frame", {Size = UDim2.new(1, 0, 0, 46), BackgroundColor3 = C.ELEMENT,
+                        BorderSizePixel = 0, LayoutOrder = i}, holder)
+                    corner(10, row)
+                    new("UIStroke", {Color = C.BORDER, Thickness = 1}, row)
+                    new("TextLabel", {Size = UDim2.new(1, -96, 1, 0), Position = UDim2.new(0, 12, 0, 0),
+                        BackgroundTransparency = 1, Text = pl.DisplayName, TextColor3 = C.TEXT, TextSize = 13,
+                        Font = Enum.Font.GothamSemibold, TextXAlignment = Enum.TextXAlignment.Left,
+                        TextTruncate = Enum.TextTruncate.AtEnd}, row)
+                    local b = new("TextButton", {Size = UDim2.new(0, 76, 0, 32), Position = UDim2.new(1, -86, 0.5, -16),
+                        BackgroundColor3 = C.RED, Text = actionText, TextColor3 = C.TEXT, TextSize = 12,
+                        Font = Enum.Font.GothamBold, BorderSizePixel = 0}, row)
+                    corner(8, b)
+                    onTap(b, function() task.spawn(callback, pl) end)
+                end
+            end
+        end
+        refresh()
+        Players.PlayerAdded:Connect(function() task.wait(0.3) refresh() end)
+        Players.PlayerRemoving:Connect(function() task.wait(0.3) refresh() end)
+        return refresh
+    end
+
     return T
 end
 
@@ -319,6 +354,7 @@ local targetEspEnabled, targetObj, targetConn = false, nil, nil
 local hatEnabled, hat = false, nil
 local gunEsp, coinEsp = false, false
 local infJump, antiAfk, antiFling = false, true, false
+local noclipUser = false
 
 --------------------------------------------------
 -- ESP РОЛЕЙ
@@ -399,7 +435,7 @@ local function stopFly()
     if bodyGyro then bodyGyro:Destroy() bodyGyro = nil end
     local hum = myHum()
     if hum then hum.PlatformStand = false end
-    toggleNoclip(false)
+    toggleNoclip(noclipUser)
 end
 
 RunService.RenderStepped:Connect(function(dt)
@@ -727,11 +763,148 @@ RunService.Heartbeat:Connect(function()
     end)
 end)
 
+--------------------------------------------------
+-- GRAB GUN
+--------------------------------------------------
+local flingBusy = false
+local grabGun, grabBusy, grabLast = false, false, 0
+
+local function sheriffAlive()
+    for _, pl in ipairs(Players:GetPlayers()) do
+        if pl ~= LocalPlayer and getRole(pl) == "Sheriff" then
+            local h = pl.Character and pl.Character:FindFirstChildOfClass("Humanoid")
+            if h and h.Health > 0 then return true end
+        end
+    end
+    return false
+end
+
+local function doGrabGun()
+    if grabBusy or flingBusy then return end
+    local g = workspace:FindFirstChild("GunDrop")
+    if not g then return end
+    local part = g:IsA("BasePart") and g or g:FindFirstChildWhichIsA("BasePart", true)
+    if not part then return end
+    -- берём только если шериф мёртв (пистолет выпал) и у нас пистолета нет
+    if sheriffAlive() or hasGun() or getRole(LocalPlayer) == "Murderer" then return end
+    local hrp = myHrp()
+    if not hrp then return end
+
+    grabBusy = true
+    grabLast = os.clock()
+    local origin = hrp.CFrame
+    local t0 = os.clock()
+    while os.clock() - t0 < 2 do
+        hrp = myHrp()
+        if not hrp or not g.Parent then break end -- нет персонажа / пистолет уже забрали
+        hrp.CFrame = part.CFrame
+        pcall(function()
+            if firetouchinterest then
+                firetouchinterest(hrp, part, 0)
+                firetouchinterest(hrp, part, 1)
+            end
+        end)
+        if hasGun() then break end
+        task.wait(0.1)
+    end
+    hrp = myHrp()
+    if hrp then
+        hrp.AssemblyLinearVelocity = Vector3.zero
+        hrp.CFrame = origin -- назад на прежнюю точку
+    end
+    grabBusy = false
+end
+
+task.spawn(function()
+    while true do
+        task.wait(0.3)
+        if grabGun and not grabBusy and os.clock() - grabLast > 3 then
+            if not pcall(doGrabGun) then grabBusy = false end
+        end
+    end
+end)
+
+--------------------------------------------------
+-- FLING
+-- Метод "velocity desync": в Heartbeat ставим огромную скорость и стоим
+-- в цели, в Stepped/RenderStepped гасим её. Сервер видит удар, а нас самих
+-- не уносит. В конце возвращаемся на исходную точку.
+--------------------------------------------------
+local function flingPlayer(target)
+    if flingBusy then notify("Fling уже идёт") return end
+    if grabBusy then notify("Подожди, идёт GrabGun") return end
+    if not target or target == LocalPlayer then return end
+    if flyEnabled then notify("Выключи Fly перед флингом") return end
+    local hrp, hum = myHrp(), myHum()
+    local tc = target.Character
+    local thrp = tc and tc:FindFirstChild("HumanoidRootPart")
+    if not hrp or not hum or not thrp then notify("Игрок недоступен") return end
+
+    flingBusy = true
+    local origin = hrp.CFrame
+    local startPos = thrp.Position
+    local prevAnti = antiFling
+    antiFling = false          -- иначе AntiFling уберёт коллизии и фling не сработает
+    toggleNoclip(false)        -- чтобы наши части сталкивались с целью
+
+    local stepConn = RunService.Stepped:Connect(function()
+        local h = myHrp()
+        if h then
+            h.AssemblyLinearVelocity = Vector3.zero
+            h.AssemblyAngularVelocity = Vector3.zero
+        end
+    end)
+    local hbConn = RunService.Heartbeat:Connect(function()
+        local h = myHrp()
+        local tch = target.Character
+        local tr = tch and tch:FindFirstChild("HumanoidRootPart")
+        if not h or not tr then return end
+        h.CFrame = tr.CFrame + tr.AssemblyLinearVelocity * 0.08
+        h.AssemblyLinearVelocity = Vector3.new(1e5, 1e5, 1e5)
+        h.AssemblyAngularVelocity = Vector3.new(1e5, 1e5, 1e5)
+    end)
+
+    pcall(function()
+        local t0 = os.clock()
+        while os.clock() - t0 < 3 do
+            task.wait(0.1)
+            local tch = target.Character
+            local tr = tch and tch:FindFirstChild("HumanoidRootPart")
+            local th = tch and tch:FindFirstChildOfClass("Humanoid")
+            if not tr or not th or th.Health <= 0 or not myHrp() then break end
+            if tr.AssemblyLinearVelocity.Magnitude > 300 or (tr.Position - startPos).Magnitude > 120 then
+                task.wait(0.15)
+                break -- улетел
+            end
+        end
+    end)
+
+    hbConn:Disconnect()
+    stepConn:Disconnect()
+    for _ = 1, 12 do -- возвращаемся и гасим всё, что могло накопиться
+        local h = myHrp()
+        if h then
+            h.AssemblyLinearVelocity = Vector3.zero
+            h.AssemblyAngularVelocity = Vector3.zero
+            h.CFrame = origin
+        end
+        RunService.Heartbeat:Wait()
+    end
+    antiFling = prevAnti
+    toggleNoclip(noclipUser)
+    flingBusy = false
+end
+
+local function flingRole(role)
+    local pl = findByRole(role, true)
+    if pl then flingPlayer(pl) else notify(role .. " не найден") end
+end
+
 LocalPlayer.CharacterAdded:Connect(function(c)
     task.wait(0.5)
     if hatEnabled then applyHat(c) end
     if flyEnabled then startFly() end
-    if noclipEnabled and not flyEnabled then toggleNoclip(true) end
+    if noclipUser and not flyEnabled then toggleNoclip(true) end
 end)
 
 --------------------------------------------------
@@ -751,7 +924,7 @@ t1.Toggle("SpeedHack", false, function(v)
     if h and not v then h.WalkSpeed = 16 end
 end, ICONS.SPEED)
 t1.Slider("Скорость", 16, 300, 16, " sp", function(v) speedValue = v end)
-t1.Toggle("NoClip", false, function(v) if not flyEnabled then toggleNoclip(v) else noclipEnabled = v end end, ICONS.NOCLIP)
+t1.Toggle("NoClip", false, function(v) noclipUser = v if not flyEnabled then toggleNoclip(v) end end, ICONS.NOCLIP)
 t1.Toggle("Fly (джойстик + ▲▼)", false, function(v)
     flyEnabled = v
     flyGui.Enabled = v
@@ -808,6 +981,20 @@ t5.Toggle("Anti-AFK", true, function(v) antiAfk = v end, ICONS.UTIL)
 t5.Toggle("Anti-Fling", false, function(v) antiFling = v end, ICONS.SHIELD)
 t5.Toggle("FPS Boost", false, fpsBoost, ICONS.SPEED)
 
+-- GrabGun во вкладке "Шериф"
+t3.Section("🔫 Пистолет")
+t3.Toggle("GrabGun (авто-подбор выпавшего пистолета)", false, function(v) grabGun = v end, ICONS.GUN)
+
+-- Fling
+local t6 = addTab("Fling", ICONS.FLING)
+t6.Section("🌀 Fling (вернёт на прежнее место)")
+t6.Button("Fling Murderer", function() flingRole("Murderer") end)
+t6.Button("Fling Sheriff", function() flingRole("Sheriff") end)
+t6.Section("👥 Игроки на сервере")
+local refreshList
+t6.Button("🔄 Обновить список", function() if refreshList then refreshList() end end)
+refreshList = t6.PlayerList("FLING", flingPlayer)
+
 --------------------------------------------------
 -- ПЛАВАЮЩАЯ КНОПКА
 --------------------------------------------------
@@ -862,4 +1049,4 @@ UIS.InputBegan:Connect(function(i, gpe)
     if i.KeyCode == Enum.KeyCode.Insert or i.KeyCode == Enum.KeyCode.RightControl then setMenu(not menuVisible) end
 end)
 
-print("[Maneware] v2 загружен")
+print("[Maneware] v3 загружен")
