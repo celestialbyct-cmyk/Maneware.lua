@@ -155,7 +155,7 @@ tw(main, 0.4, {Size = FULL})
 local topbar = new("Frame", {Size = UDim2.new(1, 0, 0, 55), BackgroundColor3 = C.TOPBAR, BorderSizePixel = 0, Active = true}, main)
 createIcon(ICONS.MENU, UDim2.new(0, 24, 0, 24), topbar).Position = UDim2.new(0, 15, 0.5, -12)
 new("TextLabel", {Size = UDim2.new(0.6, 0, 1, 0), Position = UDim2.new(0, 50, 0, 0), BackgroundTransparency = 1,
-    Text = "Maneware | MM2 v7", TextColor3 = C.TEXT, TextSize = 16, Font = Enum.Font.GothamBold,
+    Text = "Maneware | MM2 v8", TextColor3 = C.TEXT, TextSize = 16, Font = Enum.Font.GothamBold,
     TextXAlignment = Enum.TextXAlignment.Left}, topbar)
 local closeBtn = new("TextButton", {Size = UDim2.new(0, 40, 0, 40), Position = UDim2.new(1, -48, 0.5, -20),
     BackgroundColor3 = C.RED, Text = "✕", TextColor3 = C.TEXT, TextSize = 18, Font = Enum.Font.GothamBold,
@@ -792,15 +792,14 @@ task.spawn(function()
                 end
             end
             if coinEsp then
-                for _, m in ipairs(workspace:GetChildren()) do
-                    local cc = m:IsA("Model") and m:FindFirstChild("CoinContainer")
-                    if cc then
-                        for _, coin in ipairs(cc:GetChildren()) do
-                            if coin:IsA("BasePart") and not coin:FindFirstChild("MWCoin") then
-                                new("BoxHandleAdornment", {Name = "MWCoin", Adornee = coin,
-                                    Size = Vector3.new(1.6, 1.6, 1.6), Color3 = Color3.fromRGB(255, 215, 0),
-                                    Transparency = 0.35, AlwaysOnTop = true, ZIndex = 1}, coin)
-                            end
+                local cc = workspace:FindFirstChild("CoinContainer", true)
+                if cc then
+                    for _, coin in ipairs(cc:GetChildren()) do
+                        local cp = coin:IsA("BasePart") and coin or coin:FindFirstChildWhichIsA("BasePart", true)
+                        if cp and not cp:FindFirstChild("MWCoin") then
+                            new("BoxHandleAdornment", {Name = "MWCoin", Adornee = cp,
+                                Size = Vector3.new(1.6, 1.6, 1.6), Color3 = Color3.fromRGB(255, 215, 0),
+                                Transparency = 0.35, AlwaysOnTop = true, ZIndex = 1}, cp)
                         end
                     end
                 end
@@ -817,6 +816,8 @@ local function tpTo(cf)
     if hrp then hrp.CFrame = cf end
 end
 local function findMap()
+    local cc0 = workspace:FindFirstChild("CoinContainer", true)
+    if cc0 and cc0.Parent and cc0.Parent ~= workspace then return cc0.Parent end
     for _, m in ipairs(workspace:GetChildren()) do
         if m:IsA("Model") and m.Name ~= "Lobby" and (m:FindFirstChild("CoinContainer") or m:FindFirstChild("Spawns")) then
             return m
@@ -842,7 +843,8 @@ local function tpMap()
     local list = spawns and spawns:GetChildren() or {}
     local target = #list > 0 and list[math.random(#list)] or nil
     if target and target:IsA("BasePart") then tpTo(target.CFrame + Vector3.new(0, 4, 0))
-    else tpTo(map:GetPivot() + Vector3.new(0, 10, 0)) end
+    elseif map:IsA("Model") then tpTo(map:GetPivot() + Vector3.new(0, 10, 0))
+    else notify("Точка телепорта на карте не найдена") end
 end
 local function tpRole(role)
     local p = findByRole(role, true)
@@ -1376,6 +1378,7 @@ end)
 --------------------------------------------------
 local farm = {on = false, speed = 30, limit = 40, flingMurd = false, reset = false, walls = true,
     safe = 0, count = 0, done = false}
+do -- блок autofarm (локальные переменные живут только тут)
 local coinSkip = setmetatable({}, {__mode = "k"})
 local lastContainer, cachedCC, lastCCScan, lastFarmWarn = nil, nil, 0, 0
 
@@ -1538,10 +1541,14 @@ task.spawn(function()
     end
 end)
 
+end -- конец блока autofarm
+
 --------------------------------------------------
 -- KILL EFFECTS: эффекты, когда умирает убийца / шериф
 --------------------------------------------------
 local fx = {ghost = false, lightning = false, star = false, starCount = 5, starSpeed = 2}
+local fxDeath
+do -- блок эффектов
 
 -- 1) Ghost: полупрозрачная копия игрока плавно поднимается вверх и исчезает
 local function spawnGhost(ch)
@@ -1666,7 +1673,7 @@ local function spawnStars(pos)
     end
 end
 
-local function fxDeath(ch, pos)
+fxDeath = function(ch, pos)
     if fx.ghost then pcall(spawnGhost, ch) end
     if fx.lightning then pcall(spawnLightning, pos) end
     if fx.star then pcall(spawnStars, pos) end
@@ -1701,6 +1708,7 @@ local function hookDeath(pl)
 end
 for _, pl in ipairs(Players:GetPlayers()) do hookDeath(pl) end
 Players.PlayerAdded:Connect(hookDeath)
+end -- конец блока эффектов
 
 --------------------------------------------------
 -- ПОИСК АССЕТОВ (Creator Store): морфы и звуки ИЩЕМ, а не создаём
@@ -2011,6 +2019,8 @@ end
 --------------------------------------------------
 local wm = {on = false, style = 1, size = 5}
 local wmRebuild, wmSetScale = function() end, function() end
+local WM_STYLES
+do -- блок стилей watermark
 local StatsService = game:GetService("Stats")
 
 local function mskTime() -- время по Москве (UTC+3)
@@ -2124,7 +2134,8 @@ local function wmStyle4(root)
         lPlace.Text = "Загадка убийства 2"
     end
 end
-local WM_STYLES = {wmStyle1, wmStyle2, wmStyle3, wmStyle4}
+WM_STYLES = {wmStyle1, wmStyle2, wmStyle3, wmStyle4}
+end -- конец блока watermark
 
 LocalPlayer.CharacterAdded:Connect(function(c)
     task.wait(0.5)
@@ -2134,6 +2145,7 @@ LocalPlayer.CharacterAdded:Connect(function(c)
     if cm.on then applyCustomModel() end
 end)
 
+local function buildUI()
 --------------------------------------------------
 -- ВКЛАДКИ
 --------------------------------------------------
@@ -2561,7 +2573,8 @@ local function createBind(name, pos)
         BackgroundColor3 = C.ELEMENT, Text = name, TextColor3 = C.TEXT, TextScaled = true, Font = Enum.Font.GothamBold,
         AutoButtonColor = false, BorderSizePixel = 0, ZIndex = 5}, bindGui)
     new("UITextSizeConstraint", {MaxTextSize = 13, MinTextSize = 7}, btn)
-    pad(btn, 4, 3)
+    new("UIPadding", {PaddingLeft = UDim.new(0, 4), PaddingRight = UDim.new(0, 4), PaddingTop = UDim.new(0, 3),
+        PaddingBottom = UDim.new(0, 3)}, btn)
     corner(10, btn)
     new("UIStroke", {Color = C.ACCENT, Thickness = 1.5}, btn)
     onTap(btn, function()
@@ -2701,4 +2714,12 @@ if type(uiData.binds) == "table" then
     for name, t in pairs(uiData.binds) do pcall(createBind, name, tblToPos(t)) end
 end
 
-print("[Maneware] v7 загружен")
+end -- buildUI
+
+local okUI, errUI = pcall(buildUI)
+if not okUI then
+    warn("[Maneware] ошибка интерфейса: " .. tostring(errUI))
+    notify("Ошибка UI: " .. tostring(errUI))
+end
+
+print("[Maneware] v8 загружен")
