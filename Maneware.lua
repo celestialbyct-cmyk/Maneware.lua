@@ -111,10 +111,17 @@ local function createIcon(id, size, parent)
         ImageColor3 = C.TEXT, ScaleType = Enum.ScaleType.Fit}, parent)
 end
 local function onTap(btn, fn) btn.Activated:Connect(fn) end
+local NT = {} -- хуки уведомлений (send/toggle заполняются ниже)
 local function notify(text)
-    pcall(function()
-        StarterGui:SetCore("SendNotification", {Title = "Maneware", Text = text, Duration = 3})
-    end)
+    text = tostring(text)
+    local title, msg = text:match("^([^:]-):%s*(.+)$") -- "Название: сообщение" -> две строки карточки
+    if NT.send then
+        NT.send(title or "Maneware", msg or text)
+    else
+        pcall(function()
+            StarterGui:SetCore("SendNotification", {Title = "Maneware", Text = text, Duration = 3})
+        end)
+    end
 end
 
 --------------------------------------------------
@@ -155,7 +162,7 @@ tw(main, 0.4, {Size = FULL})
 local topbar = new("Frame", {Size = UDim2.new(1, 0, 0, 55), BackgroundColor3 = C.TOPBAR, BorderSizePixel = 0, Active = true}, main)
 createIcon(ICONS.MENU, UDim2.new(0, 24, 0, 24), topbar).Position = UDim2.new(0, 15, 0.5, -12)
 new("TextLabel", {Size = UDim2.new(0.6, 0, 1, 0), Position = UDim2.new(0, 50, 0, 0), BackgroundTransparency = 1,
-    Text = "Maneware | MM2 v8", TextColor3 = C.TEXT, TextSize = 16, Font = Enum.Font.GothamBold,
+    Text = "Maneware | MM2 v9", TextColor3 = C.TEXT, TextSize = 16, Font = Enum.Font.GothamBold,
     TextXAlignment = Enum.TextXAlignment.Left}, topbar)
 local closeBtn = new("TextButton", {Size = UDim2.new(0, 40, 0, 40), Position = UDim2.new(1, -48, 0.5, -20),
     BackgroundColor3 = C.RED, Text = "✕", TextColor3 = C.TEXT, TextSize = 18, Font = Enum.Font.GothamBold,
@@ -194,6 +201,8 @@ local content = new("Frame", {Size = UDim2.new(1, -140, 1, -55), Position = UDim
 -- ВКЛАДКИ / ЭЛЕМЕНТЫ
 --------------------------------------------------
 local REG = {} -- реестр: имя настройки -> get/set (для конфигов)
+local ACT = {} -- кнопки-действия (для биндов)
+local X = {}   -- общие функции между блоками
 local tabs, activeTab = {}, nil
 
 local function addTab(name, icon, order)
@@ -263,11 +272,12 @@ local function addTab(name, icon, order)
             Position = state and UDim2.new(1, -25, 0.5, -11) or UDim2.new(0, 3, 0.5, -11),
             BackgroundColor3 = Color3.new(1, 1, 1), BorderSizePixel = 0}, bg)
         corner(11, dot)
-        local function apply(v)
+        local function apply(v, silent)
             state = v and true or false
             tw(bg, 0.2, {BackgroundColor3 = state and C.ACCENT or Color3.fromRGB(55, 55, 70)})
             tw(dot, 0.2, {Position = state and UDim2.new(1, -25, 0.5, -11) or UDim2.new(0, 3, 0.5, -11)})
             if callback then task.spawn(callback, state) end
+            if not silent and NT.toggle then NT.toggle(text, state) end
         end
         onTap(el, function() apply(not state) end)
         REG[text] = {kind = "toggle", get = function() return state end, set = apply}
@@ -334,11 +344,12 @@ local function addTab(name, icon, order)
             menu.Visible = open
             arrow.Text = open and "▲" or "▼"
         end)
-        local function apply(v)
+        local function apply(v, silent)
             state = v and true or false
             tw(bg, 0.2, {BackgroundColor3 = state and C.ACCENT or Color3.fromRGB(55, 55, 70)})
             tw(dot, 0.2, {Position = state and UDim2.new(1, -25, 0.5, -11) or UDim2.new(0, 3, 0.5, -11)})
             if callback then task.spawn(callback, state) end
+            if not silent and NT.toggle then NT.toggle(text, state) end
         end
         onTap(el, function() apply(not state) end)
         REG[text] = {kind = "toggle", get = function() return state end, set = apply}
@@ -418,6 +429,7 @@ local function addTab(name, icon, order)
             AutoButtonColor = true, BorderSizePixel = 0}, page)
         corner(10, el)
         new("UIStroke", {Color = C.BORDER, Thickness = 1}, el)
+        if callback then ACT[text] = callback end
         onTap(el, function() if callback then task.spawn(callback) end end)
     end
 
@@ -670,25 +682,32 @@ local function buildReticle()
     local bb = new("BillboardGui", {Name = "MWTargetBB", Size = UDim2.new(3, 0, 3, 0), AlwaysOnTop = true,
         LightInfluence = 0, Enabled = false})
     local spin = new("Frame", {Size = UDim2.new(1, 0, 1, 0), BackgroundTransparency = 1, Rotation = 25}, bb)
-    local glow = new("Frame", {Size = UDim2.new(1, 0, 1, 0), BackgroundTransparency = 1}, spin)
-    local core = new("Frame", {Size = UDim2.new(1, 0, 1, 0), BackgroundTransparency = 1}, spin)
-    local function corners(parent, color, thick, transp, len)
+    local glow = new("Frame", {Name = "Glow", Size = UDim2.new(1, 0, 1, 0), BackgroundTransparency = 1}, spin)
+    local lines = {} -- {frame, горизонтальная?, базовая толщина, длина}
+    local function corners(parent, color, base, transp, len)
         for _, a in ipairs({Vector2.new(0, 0), Vector2.new(1, 0), Vector2.new(0, 1), Vector2.new(1, 1)}) do
-            new("Frame", {Size = UDim2.new(len, 0, 0, thick), Position = UDim2.new(a.X, 0, a.Y, 0), AnchorPoint = a,
+            local hz = new("Frame", {Size = UDim2.new(len, 0, 0, base), Position = UDim2.new(a.X, 0, a.Y, 0), AnchorPoint = a,
                 BackgroundColor3 = color, BackgroundTransparency = transp, BorderSizePixel = 0}, parent)
-            new("Frame", {Size = UDim2.new(0, thick, len, 0), Position = UDim2.new(a.X, 0, a.Y, 0), AnchorPoint = a,
+            local vt = new("Frame", {Size = UDim2.new(0, base, len, 0), Position = UDim2.new(a.X, 0, a.Y, 0), AnchorPoint = a,
                 BackgroundColor3 = color, BackgroundTransparency = transp, BorderSizePixel = 0}, parent)
+            table.insert(lines, {hz, true, base, len})
+            table.insert(lines, {vt, false, base, len})
         end
     end
-    corners(glow, Color3.fromRGB(255, 40, 80), 8, 0.7, 0.36)  -- свечение (Glow)
-    corners(core, Color3.fromRGB(255, 70, 100), 3, 0, 0.34)   -- основные уголки
-    return bb, spin, glow
+    -- Glow: светящееся гало + толстые полупрозрачные уголки (создаются первыми - лежат под основными)
+    local halo = new("Frame", {Size = UDim2.new(1, 6, 1, 6), Position = UDim2.new(0, -3, 0, -3),
+        BackgroundColor3 = Color3.fromRGB(255, 30, 70), BackgroundTransparency = 0.86, BorderSizePixel = 0}, glow)
+    corner(6, halo)
+    new("UIStroke", {Color = Color3.fromRGB(255, 40, 80), Thickness = 5, Transparency = 0.5}, halo)
+    corners(glow, Color3.fromRGB(255, 50, 90), 11, 0.5, 0.40)
+    corners(spin, Color3.fromRGB(255, 80, 110), 3, 0, 0.34) -- основные уголки
+    return bb, spin, glow, lines
 end
 
 local function applyTarget()
     removeTarget()
     if not targetEspEnabled then return end
-    local bb, spin, glow = buildReticle()
+    local bb, spin, glow, lines = buildReticle()
     targetObj = bb
     local angle = 25
     targetConn = RunService.RenderStepped:Connect(function(dt)
@@ -699,9 +718,21 @@ local function applyTarget()
         local h = ch and ch:FindFirstChildOfClass("Humanoid")
         if r and h and h.Health > 0 then
             if bb.Parent ~= r then bb.Parent = r end
+            bb.Adornee = r
             local sz = 6 * tgt.size
             bb.Size = UDim2.new(sz, 0, sz, 0)
             glow.Visible = tgt.glow
+            -- вдали линии тоньше (но не сильно): x0.5 на 90 стадах, x1.2 вблизи
+            local dist = (r.Position - Camera.CFrame.Position).Magnitude
+            local k = math.clamp((22 / math.max(dist, 8)) ^ 0.5, 0.5, 1.2)
+            for _, ln in ipairs(lines) do
+                local th = math.max(1, ln[3] * k)
+                if ln[2] then
+                    ln[1].Size = UDim2.new(ln[4], 0, 0, th)
+                else
+                    ln[1].Size = UDim2.new(0, th, ln[4], 0)
+                end
+            end
             bb.Enabled = true
             angle += dt * 70 * tgt.speed
             spin.Rotation = angle % 360
@@ -762,7 +793,7 @@ task.spawn(function()
                 if part then
                     if gunNotified ~= g then
                         gunNotified = g
-                        notify("🔫 Пистолет выпал!")
+                        notify("Gun ESP: Пистолет упал")
                     end
                     if not part:FindFirstChild("MWGunBox") then -- 3D-бокс (минимум 2.5 стада)
                         new("BoxHandleAdornment", {Name = "MWGunBox", Adornee = part,
@@ -922,7 +953,7 @@ end
 -- SHERIFF AIM
 --------------------------------------------------
 local aim = {on = false, visible = true, predict = true, strength = 100, range = 250, cd = 1.0, last = 0}
-local BULLET_SPEED = 200
+local BULLET_SPEED = 1500 -- пуля MM2 мгновенная (hitscan): упреждаем только на задержку сети
 local aimBusy = false
 
 local function hasGun()
@@ -965,19 +996,28 @@ RunService.Heartbeat:Connect(function(dt)
     end
 end)
 
+-- задержка туда-обратно (сек): именно на неё цель успевает сместиться
+local function getRtt()
+    local ok, v = pcall(function() return game:GetService("Stats").Network.ServerStatsItem["Data Ping"]:GetValue() end)
+    if ok and v and v > 0 then return v / 1000 end
+    local ok2, pp = pcall(function() return LocalPlayer:GetNetworkPing() end)
+    return ok2 and pp * 2 or 0.1
+end
+
 local function predictAt(hrp, speed, strength)
     local pos = hrp.Position
     local my = myHrp()
     local d = vTrack[hrp]
     local vel = d and d.vel or hrp.AssemblyLinearVelocity
-    if vel.Magnitude > 60 then vel = vel.Unit * 60 end -- отсекаем рывки/телепорты
-    vel = Vector3.new(vel.X, vel.Y * 0.3, vel.Z)
-    local ping = 0
-    pcall(function() ping = LocalPlayer:GetNetworkPing() end)
+    local hum = hrp.Parent and hrp.Parent:FindFirstChildOfClass("Humanoid")
+    if hum and hum.MoveDirection.Magnitude < 0.05 then vel = vel * 0.2 end -- стоит: упреждение почти не нужно
+    if vel.Magnitude > 45 then vel = vel.Unit * 45 end -- отсекаем рывки/телепорты
+    vel = Vector3.new(vel.X, vel.Y * 0.4, vel.Z)
+    local rtt = getRtt()
     local origin = my and my.Position or Camera.CFrame.Position
     local predicted = pos
-    for _ = 1, 3 do -- время полёта зависит от точки упреждения, уточняем итерациями
-        local t = (predicted - origin).Magnitude / speed + ping
+    for _ = 1, 3 do -- время зависит от точки упреждения, уточняем итерациями
+        local t = (predicted - origin).Magnitude / speed + rtt
         predicted = pos + vel * t * strength
     end
     return predicted
@@ -1807,13 +1847,13 @@ local function radioGroup(tab, prefix, labels, defIdx, onPick, iconId)
                 for j = 1, #labels do
                     if j ~= i then
                         local e = REG[keys[j]]
-                        if e and e.get() then e.set(false) end
+                        if e and e.get() then e.set(false, true) end
                     end
                 end
                 onPick(i, changed)
             elseif cur == i then
                 local e = REG[keys[i]]
-                if e then task.defer(function() e.set(true) end) end -- один стиль всегда выбран
+                if e then task.defer(function() e.set(true, true) end) end -- один стиль всегда выбран
             end
         end, iconId)
     end
@@ -2091,10 +2131,6 @@ end
 -- Стиль 3: зелёная плашка + аватар + белая табличка MANEWARE
 local function wmStyle3(root)
     local f = new("Frame", {Size = UDim2.new(0, 210, 0, 58), BackgroundTransparency = 1}, root)
-    local strip = new("Frame", {Size = UDim2.new(1, -20, 0, 24), Position = UDim2.new(0, 20, 0, 0),
-        BackgroundColor3 = Color3.fromRGB(48, 175, 62), BorderSizePixel = 0}, f)
-    corner(6, strip)
-    new("UIGradient", {Color = ColorSequence.new(Color3.fromRGB(70, 200, 80), Color3.fromRGB(30, 140, 50))}, strip)
     local av = new("ImageLabel", {Size = UDim2.new(0, 44, 0, 44), Position = UDim2.new(0, 0, 0, 8),
         BackgroundColor3 = Color3.fromRGB(20, 20, 26), BorderSizePixel = 0, ZIndex = 3,
         Image = "rbxthumb://type=AvatarHeadShot&id=" .. LocalPlayer.UserId .. "&w=150&h=150"}, f)
@@ -2136,6 +2172,297 @@ local function wmStyle4(root)
 end
 WM_STYLES = {wmStyle1, wmStyle2, wmStyle3, wmStyle4}
 end -- конец блока watermark
+
+--------------------------------------------------
+-- NOTIFY (карточки как в Celestial) / SOUNDNOTIFY / GRADIENTS (состояние)
+--------------------------------------------------
+local nf = {on = true}
+local sn = {on = false, sel = 1, id = nil}
+local SN_SLOTS = {{key = "celestial", label = "Celestial (MC 1.16.5)", q = "celestial client"}}
+local grad = {on = false, sel = 1}
+
+do -- карточки-уведомления: 1 строка - название функции/событие, 2 строка - что произошло
+    local toastGui = makeGui("ManewareToast", 100001)
+    local holder = new("Frame", {Size = UDim2.new(0, 250, 1, -24), Position = UDim2.new(1, -262, 0, 12),
+        BackgroundTransparency = 1}, toastGui)
+    new("UIListLayout", {Padding = UDim.new(0, 8), SortOrder = Enum.SortOrder.LayoutOrder,
+        VerticalAlignment = Enum.VerticalAlignment.Bottom}, holder)
+    local active, order = {}, 0
+
+    local function playNotifySound()
+        local sd = Instance.new("Sound")
+        sd.SoundId = "rbxassetid://" .. sn.id
+        sd.Volume = 1
+        sd.Parent = game:GetService("SoundService")
+        sd:Play()
+        task.delay(4, function() sd:Destroy() end)
+    end
+
+    local function makeToast(title, msg, kind)
+        local old = active[title]
+        if old and old.Parent then old:Destroy() end -- новое уведомление заменяет старое с тем же названием
+        order += 1
+        local col = kind == "off" and Color3.fromRGB(239, 68, 68)
+            or (kind == "info" and Color3.fromRGB(110, 120, 255) or Color3.fromRGB(80, 220, 120))
+        local card = new("Frame", {Size = UDim2.new(1, 0, 0, 54), BackgroundColor3 = X.cardColor or Color3.fromRGB(14, 14, 20),
+            BackgroundTransparency = 1, BorderSizePixel = 0, LayoutOrder = order}, holder)
+        corner(10, card)
+        local stroke = new("UIStroke", {Color = Color3.fromRGB(90, 90, 120), Thickness = 1, Transparency = 1}, card)
+        local icon = new("TextLabel", {Size = UDim2.new(0, 30, 1, 0), Position = UDim2.new(0, 10, 0, 0),
+            BackgroundTransparency = 1, Text = kind == "off" and "✖" or (kind == "info" and "ℹ" or "✔"), TextColor3 = col,
+            TextSize = 22, Font = Enum.Font.GothamBold, TextTransparency = 1}, card)
+        local l1 = new("TextLabel", {Size = UDim2.new(1, -54, 0, 20), Position = UDim2.new(0, 46, 0, 8),
+            BackgroundTransparency = 1, Text = title, TextColor3 = Color3.new(1, 1, 1), TextSize = 15,
+            Font = Enum.Font.GothamBold, TextXAlignment = Enum.TextXAlignment.Left, TextTruncate = Enum.TextTruncate.AtEnd,
+            TextTransparency = 1}, card)
+        local l2 = new("TextLabel", {Size = UDim2.new(1, -54, 0, 18), Position = UDim2.new(0, 46, 0, 28),
+            BackgroundTransparency = 1, Text = msg, TextColor3 = Color3.fromRGB(205, 210, 220), TextSize = 12,
+            Font = Enum.Font.GothamSemibold, TextXAlignment = Enum.TextXAlignment.Left, TextTruncate = Enum.TextTruncate.AtEnd,
+            TextTransparency = 1}, card)
+        active[title] = card
+        local ti = TweenInfo.new(0.25, Enum.EasingStyle.Quad)
+        TweenService:Create(card, ti, {BackgroundTransparency = 0.12}):Play()
+        TweenService:Create(stroke, ti, {Transparency = 0.4}):Play()
+        for _, lb in ipairs({icon, l1, l2}) do TweenService:Create(lb, ti, {TextTransparency = 0}):Play() end
+        task.delay(2.8, function()
+            if not card.Parent then return end
+            local to = TweenInfo.new(0.3, Enum.EasingStyle.Quad)
+            TweenService:Create(card, to, {BackgroundTransparency = 1}):Play()
+            TweenService:Create(stroke, to, {Transparency = 1}):Play()
+            for _, lb in ipairs({icon, l1, l2}) do TweenService:Create(lb, to, {TextTransparency = 1}):Play() end
+            task.wait(0.35)
+            card:Destroy()
+        end)
+    end
+
+    NT.send = function(title, msg, kind)
+        if not nf.on then -- Notify выключен: обычное уведомление Roblox
+            pcall(function()
+                StarterGui:SetCore("SendNotification", {Title = title, Text = msg, Duration = 3})
+            end)
+            return
+        end
+        pcall(makeToast, title, msg, kind or "info")
+        if sn.on and sn.id then pcall(playNotifySound) end
+    end
+    NT.toggle = function(name, state)
+        if not nf.on then return end
+        local title = tostring(name):gsub("%s*%(.*$", "")
+        NT.send(title, state and "включён" or "выключен", state and "ok" or "off")
+    end
+end
+
+X.applySoundNotify = function(i)
+    task.spawn(function()
+        local id = resolveSoundSlot(SN_SLOTS[i])
+        if i ~= sn.sel then return end
+        sn.id = id
+        notify("SoundNotify: " .. (id and "звук найден" or "звук не найден, введи ID вручную"))
+    end)
+end
+
+--------------------------------------------------
+-- SVO: управляемый дрон (Shahed и др.), игрок стоит заморожен
+--------------------------------------------------
+local SVO_SLOTS = {
+    {key = "shahed1", label = "Shahed #1", q = "shahed 136 drone"},
+    {key = "shahed2", label = "Shahed #2", q = "shahed drone morph"},
+    {key = "shahed3", label = "Shahed #3", q = "geran 2 drone"},
+    {key = "kamikaze", label = "Kamikaze drone", q = "kamikaze drone"},
+    {key = "drone2", label = "Drone #2", q = "fpv drone"},
+    {key = "drone3", label = "Drone #3", q = "military drone morph"},
+}
+local svo = {on = false, sel = 1, speed = 45, busy = false}
+
+do -- блок SVO
+    local function buildDrone(slot)
+        local id = resolveModelSlot(slot) -- морф ищем в Creator Store, а не создаём
+        local tpl = id and fetchModel(id)
+        local m
+        if tpl then
+            m = tpl:Clone()
+            local kill = {}
+            for _, d in ipairs(m:GetDescendants()) do
+                if d:IsA("BaseScript") or d:IsA("Humanoid") then table.insert(kill, d) end
+            end
+            for _, d in ipairs(kill) do pcall(function() d:Destroy() end) end
+            local first
+            for _, d in ipairs(m:GetDescendants()) do
+                if d:IsA("BasePart") then
+                    d.Anchored = true
+                    d.CanCollide = false
+                    d.CanTouch = false
+                    d.CanQuery = false
+                    d.Massless = true
+                    first = first or d
+                end
+            end
+            if not m.PrimaryPart and first then pcall(function() m.PrimaryPart = first end) end
+            local _, size = m:GetBoundingBox()
+            local maxd = math.max(size.X, size.Y, size.Z)
+            if maxd > 14 or maxd < 2 then pcall(function() m:ScaleTo(6 / maxd) end) end
+        else
+            notify("SVO: морф не найден, лечу запасной моделью")
+            m = Instance.new("Model")
+            local body = new("Part", {Size = Vector3.new(1, 1, 6), Color = Color3.fromRGB(80, 85, 90),
+                Material = Enum.Material.Metal, Anchored = true, CanCollide = false, CanTouch = false, CanQuery = false}, m)
+            new("WedgePart", {Size = Vector3.new(6, 0.25, 3), Color = Color3.fromRGB(95, 100, 105),
+                Material = Enum.Material.Metal, Anchored = true, CanCollide = false, CanTouch = false, CanQuery = false,
+                CFrame = body.CFrame * CFrame.new(0, 0, 1.5)}, m)
+            m.PrimaryPart = body
+        end
+        return m
+    end
+
+    local function explode(pos)
+        pcall(function()
+            local ex = Instance.new("Explosion")
+            ex.Position = pos
+            ex.BlastRadius = 12
+            ex.BlastPressure = 0 -- только визуально
+            ex.DestroyJointRadiusPercent = 0
+            ex.Parent = workspace
+        end)
+        local flash = new("Part", {Shape = Enum.PartType.Ball, Size = Vector3.new(4, 4, 4), Position = pos, Anchored = true,
+            CanCollide = false, CanTouch = false, CanQuery = false, Material = Enum.Material.Neon,
+            Color = Color3.fromRGB(255, 170, 60), Transparency = 0.2}, workspace)
+        TweenService:Create(flash, TweenInfo.new(0.5), {Size = Vector3.new(22, 22, 22), Transparency = 1}):Play()
+        task.delay(0.6, function() flash:Destroy() end)
+    end
+
+    local function runSvo()
+        svo.busy = true
+        local drone
+        local ok, err = pcall(function()
+            local slot = SVO_SLOTS[svo.sel]
+            notify("SVO: готовлю " .. slot.label)
+            drone = buildDrone(slot)
+            if not svo.on then return end
+            local hrp, hum = myHrp(), myHum()
+            if not hrp or not hum or hum.Health <= 0 then notify("SVO: нет персонажа") return end
+            drone.Name = "MWDrone"
+            drone.Parent = workspace
+            local pos = hrp.Position + Vector3.new(0, 6, 0)
+            local cf = CFrame.lookAt(pos, pos + hrp.CFrame.LookVector)
+            drone:PivotTo(cf)
+            hrp.Anchored = true -- игрок стоит заморожен, пока летит дрон
+            Camera.CameraSubject = drone.PrimaryPart or drone:FindFirstChildWhichIsA("BasePart", true)
+            notify("SVO: запуск, веди дрон как при ходьбе")
+            local target
+            local t0 = os.clock()
+            while svo.on and os.clock() - t0 < 90 do
+                local dt = RunService.Heartbeat:Wait()
+                local h2 = myHum()
+                if not h2 or h2.Health <= 0 or not myHrp() then break end
+                local c = Camera.CFrame
+                local rel = c:VectorToObjectSpace(h2.MoveDirection)
+                local mv = c.LookVector * -rel.Z + c.RightVector * rel.X
+                if mv.Magnitude > 0 then
+                    pos = pos + mv.Unit * svo.speed * dt
+                    cf = CFrame.lookAt(pos, pos + mv.Unit)
+                else
+                    cf = CFrame.new(pos) * cf.Rotation
+                end
+                drone:PivotTo(cf)
+                for _, pl in ipairs(Players:GetPlayers()) do -- попадание в игрока
+                    if pl ~= LocalPlayer then
+                        local ch = pl.Character
+                        local r = ch and ch:FindFirstChild("HumanoidRootPart")
+                        local th = ch and ch:FindFirstChildOfClass("Humanoid")
+                        if r and th and th.Health > 0 and (r.Position - pos).Magnitude < 4.5 then
+                            target = pl
+                            break
+                        end
+                    end
+                end
+                if target then break end
+            end
+            if target then explode(pos) end
+            drone:Destroy()
+            drone = nil
+            local hrp2, hum2 = myHrp(), myHum()
+            if hrp2 then hrp2.Anchored = false end -- разморозка
+            if hum2 then Camera.CameraSubject = hum2 end
+            if target then
+                notify("SVO: попадание в " .. target.DisplayName)
+                flingPlayer(target) -- флинг цели и возврат на место, где стоял до запуска
+            else
+                notify("SVO: полёт отменён")
+            end
+        end)
+        if drone then pcall(function() drone:Destroy() end) end
+        local hrp3, hum3 = myHrp(), myHum()
+        if hrp3 then hrp3.Anchored = false end
+        if hum3 then Camera.CameraSubject = hum3 end
+        if not ok then
+            warn("[Maneware] SVO: " .. tostring(err))
+            notify("SVO: ошибка " .. tostring(err))
+        end
+        svo.on = false
+        local e = REG["SVO"]
+        if e and e.get() then e.set(false, true) end
+        svo.busy = false
+    end
+
+    X.svoToggle = function(v)
+        if v and not svo.busy then task.spawn(runSvo) end
+    end
+end
+
+--------------------------------------------------
+-- TRIGGERBOT и AIMASSIST
+--------------------------------------------------
+local trig = {on = false, delay = 100, last = 0}
+local assist = {on = false, smooth = 1.0, speed = 1.0, visible = true, vis = true, visT = 0}
+
+do
+    local rp = RaycastParams.new()
+    rp.FilterType = Enum.RaycastFilterType.Exclude
+
+    -- TriggerBot: стреляет, когда хитбокс убийцы попал в прицел (центр экрана)
+    RunService.Heartbeat:Connect(function()
+        if not trig.on or aimBusy then return end
+        if os.clock() - trig.last < trig.delay / 1000 then return end
+        local mc0 = myChar()
+        if not mc0 or not hasGun() then return end
+        local m = findByRole("Murderer", true)
+        local mc = m and m.Character
+        if not mc then return end
+        local vp = Camera.ViewportSize
+        local ray = Camera:ViewportPointToRay(vp.X / 2, vp.Y / 2)
+        rp.FilterDescendantsInstances = {mc0}
+        local res = workspace:Raycast(ray.Origin, ray.Direction * 600, rp)
+        if res and res.Instance:IsDescendantOf(mc) then
+            trig.last = os.clock()
+            aimBusy = true
+            task.spawn(function()
+                pcall(function() shoot(res.Position) end)
+                aimBusy = false
+            end)
+        end
+    end)
+
+    -- AimAssist: плавно наводит камеру на убийцу
+    RunService:BindToRenderStep("MWAimAssist", Enum.RenderPriority.Camera.Value + 1, function(dt)
+        if not assist.on then return end
+        local m = findByRole("Murderer", true)
+        local mc = m and m.Character
+        local hrp = mc and mc:FindFirstChild("HumanoidRootPart")
+        local hum = mc and mc:FindFirstChildOfClass("Humanoid")
+        if not hrp or not hum or hum.Health <= 0 then return end
+        if assist.visible then
+            if os.clock() - assist.visT > 0.1 then
+                assist.visT = os.clock()
+                assist.vis = isVisible(mc) -- в поле зрения и не за стеной
+            end
+            if not assist.vis then return end
+        end
+        local cam = Camera
+        local want = CFrame.lookAt(cam.CFrame.Position, hrp.Position + Vector3.new(0, 0.5, 0))
+        local alpha = math.clamp(dt * 8 * assist.speed / math.max(assist.smooth, 0.05), 0, 1)
+        cam.CFrame = cam.CFrame:Lerp(want, alpha)
+    end)
+end
 
 LocalPlayer.CharacterAdded:Connect(function(c)
     task.wait(0.5)
@@ -2373,6 +2700,69 @@ radioGroup(t13, "Watermark: ", {"Style 1", "Style 2", "Style 3", "Style 4"}, 1, 
     wmRebuild()
 end, ICONS.EYE)
 
+-- SVO
+local t14 = addTab("SVO", ICONS.FLY)
+t14.Section("🚀 SVO: дрон-камикадзе (морфы ищутся, не создаются)")
+t14.Toggle("SVO", false, function(v)
+    svo.on = v
+    X.svoToggle(v)
+end, ICONS.FLY)
+local labelsV = {}
+for i, sl in ipairs(SVO_SLOTS) do labelsV[i] = sl.label end
+radioGroup(t14, "SVO: ", labelsV, 1, function(i) svo.sel = i end, ICONS.EYE)
+t14.Slider("SVO: Speed", 10, 120, 45, " st/s", function(v) svo.speed = v end)
+local vIdBox = t14.TextBox("ID морфа вручную (для выбранного дрона)")
+t14.Button("✔ Применить ID к выбранному дрону", function()
+    local id = tonumber(vIdBox.Text)
+    if not id then notify("Введи числовой ID") return end
+    if not fetchModel(id) then notify("Модель с таким ID не загрузилась") return end
+    assetCache["model:" .. SVO_SLOTS[svo.sel].key] = id
+    saveAssets()
+    notify("ID сохранён: " .. id)
+end)
+
+-- TriggerBot / AimAssist
+local t15 = addTab("Trigger/Assist", ICONS.AIM)
+t15.Section("🎯 TriggerBot (стреляет, когда убийца в прицеле)")
+t15.Toggle("TriggerBot", false, function(v) trig.on = v end, ICONS.AIM)
+t15.Slider("Trigger: Delay", 10, 500, 100, " мс", function(v) trig.delay = v end, 10)
+t15.Section("🧲 AimAssist (наводит камеру на убийцу)")
+t15.Toggle("AimAssist", false, function(v) assist.on = v end, ICONS.TARGET)
+t15.Slider("Assist: Smooth", 0.1, 5, 1, "", function(v) assist.smooth = v end, 0.1)
+t15.Slider("Assist: Speed", 0.1, 3, 1, "", function(v) assist.speed = v end, 0.1)
+t15.Toggle("Assist: Visible Check", true, function(v) assist.visible = v end, ICONS.EYE)
+
+-- HUD: Notify / SoundNotify / Gradients
+local t16 = addTab("HUD", ICONS.UTIL)
+t16.Section("🔔 Notify (карточки как в Celestial)")
+t16.Toggle("Notify", true, function(v) nf.on = v end, ICONS.UTIL)
+t16.Section("🔊 SoundNotify")
+t16.ToggleDrop("SoundNotify", false, function(v)
+    sn.on = v
+    if v and not sn.id then X.applySoundNotify(sn.sel) end
+end, ICONS.UTIL, {SN_SLOTS[1].label}, 1, function(i)
+    sn.sel = i
+    X.applySoundNotify(i)
+end)
+local snBox = t16.TextBox("ID звука вручную (если поиск не нашёл)")
+t16.Button("✔ Применить ID звука уведомлений", function()
+    local id = tonumber(snBox.Text)
+    if not id then notify("Введи числовой ID") return end
+    if not audioOk(id) then notify("Звук с таким ID не загрузился") return end
+    assetCache["audio:" .. SN_SLOTS[sn.sel].key] = id
+    saveAssets()
+    sn.id = id
+    notify("SoundNotify: ID сохранён")
+end)
+t16.Section("🎨 Gradients (весь HUD, ESP не меняется)")
+t16.ToggleDrop("Gradients", false, function(v)
+    grad.on = v
+    X.applyTheme()
+end, ICONS.EYE, {"Мятный", "Конфета (бирюзовый + фиолетовый)", "Серый + белый"}, 1, function(i)
+    grad.sel = i
+    if grad.on then X.applyTheme() end
+end)
+
 -- Configs
 local t9 = addTab("Configs", ICONS.UTIL)
 t9.Section("💾 Конфиги (сохранение настроек)")
@@ -2408,7 +2798,7 @@ local function cfgLoad(name)
     if not ok or type(data) ~= "table" then notify("Не удалось загрузить") return end
     for key, val in pairs(data) do
         local e = REG[key]
-        if e then pcall(e.set, val) end
+        if e then pcall(e.set, val, true) end
     end
     activeCfg = name
     notify("Загружен: " .. name)
@@ -2563,9 +2953,23 @@ local function saveUI()
     writeJson("ui.json", d)
 end
 
-local function createBind(name, pos)
+local bindStates = {}
+
+-- что делает бинд: тоггл (с состоянием) или кнопка-действие
+local function bindInfo(name)
     local e = REG[name]
-    if not e or bindButtons[name] then return false end
+    if e and e.kind == "toggle" then
+        return function() e.set(not e.get()) end, function() return e.get() end
+    end
+    local fn = ACT[name]
+    if fn then return function() task.spawn(fn) end, nil end
+    return nil
+end
+
+local function createBind(name, pos)
+    if bindButtons[name] then return false end
+    local run, getState = bindInfo(name)
+    if not run then return false end
     local n = 0
     for _ in pairs(bindButtons) do n += 1 end
     local btn = new("TextButton", {Size = UDim2.new(0, 70, 0, 42),
@@ -2579,10 +2983,11 @@ local function createBind(name, pos)
     new("UIStroke", {Color = C.ACCENT, Thickness = 1.5}, btn)
     onTap(btn, function()
         if EDIT.mode then return end
-        e.set(not e.get())
+        run()
     end)
     makeDraggable(btn, function() return EDIT.mode == "binds" end)
     bindButtons[name] = btn
+    bindStates[name] = getState or false
     return true
 end
 
@@ -2591,20 +2996,28 @@ local function deleteBind(name)
     if b then
         b:Destroy()
         bindButtons[name] = nil
+        bindStates[name] = nil
         saveUI()
-        notify("Бинд удалён")
+        notify("Бинды: бинд удалён")
     else
-        notify("Бинда нет")
+        notify("Бинды: такого бинда нет")
     end
 end
 
-task.spawn(function() -- цвет кнопки = состояние функции
+task.spawn(function() -- вид кнопки = состояние функции
     while true do
         task.wait(0.3)
         for name, b in pairs(bindButtons) do
-            local e = REG[name]
-            if e and b.Parent then
-                pcall(function() b.BackgroundColor3 = e.get() and C.ACCENT or C.ELEMENT end)
+            local gs = bindStates[name]
+            if b.Parent and gs then
+                pcall(function()
+                    if grad.on then
+                        b.BackgroundTransparency = gs() and 0 or 0.55
+                    else
+                        b.BackgroundTransparency = 0
+                        b.BackgroundColor3 = gs() and C.ACCENT or C.ELEMENT
+                    end
+                end)
             end
         end
     end
@@ -2689,11 +3102,14 @@ addSideButton("✎ Кнопка меню", ICONS.MENU, 1001, function() enterEdi
 addSideButton("✎ Watermark", ICONS.EYE, 1002, function() enterEdit("wm") end)
 addSideButton("✎ Binds", ICONS.UTIL, 1003, function() enterEdit("binds") end)
 
-tb.Section("🎛 Binds: кнопка на экране вкл/выкл функцию")
+tb.Section("🎛 Binds: кнопка на экране для функции или действия")
 local bindHolder = tb.Holder()
 local bindNames = {}
 for name, e in pairs(REG) do
     if e.kind == "toggle" then bindNames[#bindNames + 1] = name end
+end
+for name in pairs(ACT) do
+    if not (name:find("🔄") or name:find("💾") or name:find("✔")) then bindNames[#bindNames + 1] = name end
 end
 table.sort(bindNames)
 for i, name in ipairs(bindNames) do
@@ -2702,9 +3118,9 @@ for i, name in ipairs(bindNames) do
         {text = "Bind", color = C.ACCENT, w = 44, fn = function()
             if createBind(name) then
                 saveUI()
-                notify("Бинд создан. Двигать: слева ✎ Binds")
+                notify("Бинды: создан, двигать через ✎ Binds")
             else
-                notify("Бинд уже есть")
+                notify("Бинды: бинд уже есть")
             end
         end},
     })
@@ -2714,6 +3130,133 @@ if type(uiData.binds) == "table" then
     for name, t in pairs(uiData.binds) do pcall(createBind, name, tblToPos(t)) end
 end
 
+-- Gradients: меняем цвета только внутри наших GUI (hub, кнопка, binds, watermark, уведомления)
+local THEMES = {
+    {name = "mint",
+        bg = {Color3.fromRGB(10, 34, 30), Color3.fromRGB(24, 74, 62)},
+        side = {Color3.fromRGB(12, 42, 37), Color3.fromRGB(28, 86, 72)},
+        top = {Color3.fromRGB(16, 56, 48), Color3.fromRGB(38, 110, 92)},
+        el = {Color3.fromRGB(20, 58, 50), Color3.fromRGB(34, 96, 80)},
+        acc = {Color3.fromRGB(80, 235, 180), Color3.fromRGB(40, 190, 140)},
+        card = Color3.fromRGB(14, 46, 40)},
+    {name = "candy",
+        bg = {Color3.fromRGB(14, 38, 52), Color3.fromRGB(44, 22, 70)},
+        side = {Color3.fromRGB(18, 46, 62), Color3.fromRGB(52, 28, 80)},
+        top = {Color3.fromRGB(24, 70, 84), Color3.fromRGB(80, 40, 120)},
+        el = {Color3.fromRGB(26, 58, 74), Color3.fromRGB(66, 36, 100)},
+        acc = {Color3.fromRGB(64, 224, 208), Color3.fromRGB(170, 90, 255)},
+        card = Color3.fromRGB(30, 30, 64)},
+    {name = "gray",
+        bg = {Color3.fromRGB(36, 36, 40), Color3.fromRGB(86, 86, 94)},
+        side = {Color3.fromRGB(44, 44, 50), Color3.fromRGB(96, 96, 104)},
+        top = {Color3.fromRGB(60, 60, 66), Color3.fromRGB(128, 128, 138)},
+        el = {Color3.fromRGB(58, 58, 64), Color3.fromRGB(112, 112, 122)},
+        acc = {Color3.fromRGB(215, 215, 225), Color3.fromRGB(160, 160, 170)},
+        card = Color3.fromRGB(50, 50, 56)},
+}
+local BASE = {bg = C.BG, side = C.SIDEBAR, top = C.TOPBAR, el = C.ELEMENT, acc = C.ACCENT}
+local WHITE = Color3.new(1, 1, 1)
+
+local function keyOf(c)
+    if c == BASE.bg then return "bg" end
+    if c == BASE.side then return "side" end
+    if c == BASE.top then return "top" end
+    if c == BASE.el then return "el" end
+    if c == BASE.acc then return "acc" end
+    return nil
+end
+
+local function themeInst(inst, key, th)
+    local pair = th[key]
+    inst:SetAttribute("MWK", key)
+    inst:SetAttribute("MWT", th.name)
+    local g = inst:FindFirstChild("MWGrad")
+    local hasText = (inst:IsA("TextButton") or inst:IsA("TextLabel") or inst:IsA("TextBox")) and inst.Text ~= ""
+    if hasText then -- градиент перекрасил бы и текст, поэтому у кнопок с текстом - сплошной цвет
+        if g then g:Destroy() end
+        inst.BackgroundColor3 = pair[1]:Lerp(pair[2], 0.5)
+    else
+        inst.BackgroundColor3 = WHITE
+        if not g then
+            g = Instance.new("UIGradient")
+            g.Name = "MWGrad"
+            g.Rotation = 35
+            g.Parent = inst
+        end
+        g.Color = ColorSequence.new(pair[1], pair[2])
+    end
+end
+
+local THEME_ROOTS = {hubGui, toggleGui, bindGui}
+
+local function scanTheme(th)
+    for _, root in ipairs(THEME_ROOTS) do
+        for _, inst in ipairs(root:GetDescendants()) do
+            if inst:IsA("GuiObject") then
+                local k = keyOf(inst.BackgroundColor3)
+                if k then
+                    themeInst(inst, k, th)
+                else
+                    local mk = inst:GetAttribute("MWK")
+                    if mk and inst:GetAttribute("MWT") ~= th.name then themeInst(inst, mk, th) end
+                end
+                if inst:IsA("TextLabel") or inst:IsA("TextButton") or inst:IsA("TextBox") then
+                    if inst.TextColor3 == BASE.acc or inst:GetAttribute("MWTX") then
+                        inst:SetAttribute("MWTX", true)
+                        inst.TextColor3 = th.acc[1]
+                    end
+                end
+            elseif inst:IsA("UIStroke") then
+                if inst.Color == BASE.acc or inst:GetAttribute("MWTX") then
+                    inst:SetAttribute("MWTX", true)
+                    inst.Color = th.acc[1]
+                end
+            end
+        end
+    end
+    for _, g in ipairs(wmGui:GetDescendants()) do -- рамки watermark
+        if g:IsA("UIGradient") and g.Parent and g.Parent:IsA("UIStroke") then
+            g.Color = ColorSequence.new(th.acc[1], th.acc[2])
+        end
+    end
+    X.cardColor = th.card
+end
+
+local function revertTheme()
+    for _, root in ipairs(THEME_ROOTS) do
+        for _, inst in ipairs(root:GetDescendants()) do
+            if inst:GetAttribute("MWT") then
+                local mk = inst:GetAttribute("MWK")
+                if mk and BASE[mk] and inst:IsA("GuiObject") then inst.BackgroundColor3 = BASE[mk] end
+                local g = inst:FindFirstChild("MWGrad")
+                if g then g:Destroy() end
+                inst:SetAttribute("MWT", nil)
+                inst:SetAttribute("MWK", nil)
+            end
+            if inst:GetAttribute("MWTX") then
+                if inst:IsA("UIStroke") then
+                    inst.Color = BASE.acc
+                elseif inst:IsA("TextLabel") or inst:IsA("TextButton") or inst:IsA("TextBox") then
+                    inst.TextColor3 = BASE.acc
+                end
+                inst:SetAttribute("MWTX", nil)
+            end
+        end
+    end
+    X.cardColor = nil
+    if wm.on then wmRebuild() end -- вернёт исходные цвета рамок watermark
+end
+
+X.applyTheme = function()
+    if grad.on then pcall(scanTheme, THEMES[grad.sel]) else pcall(revertTheme) end
+end
+task.spawn(function() -- новые элементы (списки, бинды) подхватываются автоматически
+    while true do
+        task.wait(1)
+        if grad.on then pcall(scanTheme, THEMES[grad.sel]) end
+    end
+end)
+
 end -- buildUI
 
 local okUI, errUI = pcall(buildUI)
@@ -2722,4 +3265,4 @@ if not okUI then
     notify("Ошибка UI: " .. tostring(errUI))
 end
 
-print("[Maneware] v8 загружен")
+print("[Maneware] v9 загружен")
