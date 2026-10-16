@@ -1004,12 +1004,15 @@ local function getRtt()
     return ok2 and pp * 2 or 0.1
 end
 
-local function predictAt(hrp, speed, strength)
-    local pos = hrp.Position
+local function predictAt(part, speed, strength)
+    -- part = точка прицеливания (Head/HRP), скорость берём с HRP персонажа
+    local pos = part.Position
     local my = myHrp()
+    local char = part.Parent
+    local hrp = char and char:FindFirstChild("HumanoidRootPart") or part
     local d = vTrack[hrp]
     local vel = d and d.vel or hrp.AssemblyLinearVelocity
-    local hum = hrp.Parent and hrp.Parent:FindFirstChildOfClass("Humanoid")
+    local hum = char and char:FindFirstChildOfClass("Humanoid")
     if hum and hum.MoveDirection.Magnitude < 0.05 then vel = vel * 0.2 end -- стоит: упреждение почти не нужно
     if vel.Magnitude > 45 then vel = vel.Unit * 45 end -- отсекаем рывки/телепорты
     vel = Vector3.new(vel.X, vel.Y * 0.4, vel.Z)
@@ -1024,8 +1027,15 @@ local function predictAt(hrp, speed, strength)
 end
 
 local function predictPos(hrp)
-    if not aim.predict then return hrp.Position end
-    return predictAt(hrp, BULLET_SPEED, aim.strength / 100)
+    -- Целимся в хитбокс мардера: предпочитаем Head (лучше регистрация попаданий), иначе HRP
+    local targetPart = hrp
+    local char = hrp.Parent
+    if char then
+        local head = char:FindFirstChild("Head")
+        if head and head:IsA("BasePart") then targetPart = head end
+    end
+    if not aim.predict then return targetPart.Position end
+    return predictAt(targetPart, BULLET_SPEED, aim.strength / 100)
 end
 
 -- ВАЖНО: ремоут пистолета может меняться после обновлений MM2.
@@ -1417,7 +1427,7 @@ end)
 -- AUTOFARM МОНЕТ
 --------------------------------------------------
 local farm = {on = false, speed = 30, limit = 40, flingMurd = false, reset = false, walls = true,
-    safe = 0, count = 0, done = false}
+    safe = 0, count = 0, done = false, sessionCoins = 0}
 do -- блок autofarm (локальные переменные живут только тут)
 local coinSkip = setmetatable({}, {__mode = "k"})
 local lastContainer, cachedCC, lastCCScan, lastFarmWarn = nil, nil, 0, 0
@@ -1570,7 +1580,12 @@ task.spawn(function()
                         if coinGone(coin, hadTouch) then got = true break end
                         task.wait(0.06)
                     end
-                    if got then farm.count += 1 else coinSkip[coin] = os.clock() + 8 end
+                    if got then
+                        farm.count += 1
+                        farm.sessionCoins = (farm.sessionCoins or 0) + 1
+                    else
+                        coinSkip[coin] = os.clock() + 8
+                    end
                 else
                     coinSkip[coin] = os.clock() + 8
                 end
@@ -1582,6 +1597,39 @@ task.spawn(function()
 end)
 
 end -- конец блока autofarm
+
+-- Окно автофарма: показывает монеты за сессию
+do
+    local farmGui = makeGui("ManewareFarmHUD", 99995)
+    local farmFrame = new("Frame", {
+        Size = UDim2.new(0, 160, 0, 40),
+        Position = UDim2.new(0.5, -80, 0, 60),
+        BackgroundColor3 = Color3.fromRGB(14, 14, 20),
+        BorderSizePixel = 0,
+        Visible = false,
+        AnchorPoint = Vector2.new(0.5, 0),
+    }, farmGui)
+    corner(10, farmFrame)
+    new("UIStroke", {Color = C.ACCENT, Thickness = 1.5}, farmFrame)
+    local farmLbl = new("TextLabel", {
+        Size = UDim2.new(1, -12, 1, 0),
+        Position = UDim2.new(0, 6, 0, 0),
+        BackgroundTransparency = 1,
+        Text = "Монеты: 0",
+        TextColor3 = C.TEXT,
+        TextSize = 14,
+        Font = Enum.Font.GothamBold,
+        TextXAlignment = Enum.TextXAlignment.Center,
+    }, farmFrame)
+    RunService.Heartbeat:Connect(function()
+        if farm.on then
+            farmFrame.Visible = true
+            farmLbl.Text = "Монеты за сессию: " .. tostring(farm.sessionCoins or 0)
+        else
+            farmFrame.Visible = false
+        end
+    end)
+end
 
 --------------------------------------------------
 -- KILL EFFECTS: эффекты, когда умирает убийца / шериф
@@ -2144,7 +2192,7 @@ local function wmStyle3(root)
     return function() end
 end
 
--- Стиль 4: пинг | память | ник | название места (текст места оставлен как на фото)
+-- Стиль 4: пинг | память | ник | название места (кастомные иконки)
 local function wmStyle4(root)
     local f = new("Frame", {AutomaticSize = XY, BackgroundColor3 = Color3.fromRGB(14, 14, 22), BackgroundTransparency = 0.1,
         BorderSizePixel = 0}, root)
@@ -2153,16 +2201,17 @@ local function wmStyle4(root)
     pad(f, 14, 8)
     new("UIListLayout", {FillDirection = Enum.FillDirection.Horizontal, Padding = UDim.new(0, 16),
         VerticalAlignment = Enum.VerticalAlignment.Center, SortOrder = Enum.SortOrder.LayoutOrder}, f)
-    local function seg(order, glyph)
+    local function seg(order, iconId)
         local sg = new("Frame", {AutomaticSize = XY, BackgroundTransparency = 1, LayoutOrder = order}, f)
         new("UIListLayout", {FillDirection = Enum.FillDirection.Horizontal, Padding = UDim.new(0, 6),
             VerticalAlignment = Enum.VerticalAlignment.Center, SortOrder = Enum.SortOrder.LayoutOrder}, sg)
-        new("TextLabel", {AutomaticSize = XY, BackgroundTransparency = 1, Text = glyph, TextColor3 = Color3.fromRGB(110, 120, 255),
-            TextSize = 16, Font = Enum.Font.GothamBold, LayoutOrder = 1}, sg)
+        local ic = new("ImageLabel", {Size = UDim2.new(0, 18, 0, 18), BackgroundTransparency = 1,
+            Image = iconId or "", ImageColor3 = Color3.fromRGB(110, 120, 255), ScaleType = Enum.ScaleType.Fit, LayoutOrder = 1}, sg)
         return new("TextLabel", {AutomaticSize = XY, BackgroundTransparency = 1, Text = "", TextColor3 = Color3.new(1, 1, 1),
             TextSize = 14, Font = Enum.Font.GothamBold, LayoutOrder = 2}, sg)
     end
-    local lPing, lMem, lNick, lPlace = seg(1, "▂▄▆"), seg(2, "▣"), seg(3, "☻"), seg(4, "⬢")
+    -- кастомные иконки: SPEED (пинг), UTIL (память), TARGET (ник), HAT (место)
+    local lPing, lMem, lNick, lPlace = seg(1, ICONS.SPEED), seg(2, ICONS.UTIL), seg(3, ICONS.TARGET), seg(4, ICONS.HAT)
     return function()
         lPing.Text = getPing() .. "MS"
         lMem.Text = getMem() .. " mb"
@@ -2178,7 +2227,11 @@ end -- конец блока watermark
 --------------------------------------------------
 local nf = {on = true}
 local sn = {on = false, sel = 1, id = nil}
-local SN_SLOTS = {{key = "celestial", label = "Celestial (MC 1.16.5)", q = "celestial client"}}
+local SN_SLOTS = {
+    {key = "click1", label = "Click 1", q = "ui click button"},
+    {key = "click2", label = "Click 2", q = "soft click sound"},
+    {key = "click3", label = "Click 3", q = "notification click"},
+}
 local grad = {on = false, sel = 1}
 
 do -- карточки-уведомления: 1 строка - название функции/событие, 2 строка - что произошло
@@ -2574,6 +2627,7 @@ local t7 = addTab("Автофарм", ICONS.COIN)
 t7.Section("💰 Autofarm монет")
 t7.Toggle("Autofarm", false, function(v)
     farm.on = v
+    if v then farm.sessionCoins = 0 end -- новая сессия при включении
     if not v then toggleNoclip(noclipUser or flyEnabled) end
 end, ICONS.COIN)
 t7.Slider("Скорость фарма", 16, 50, 30, " st/s", function(v) farm.speed = v end)
@@ -2737,10 +2791,12 @@ local t16 = addTab("HUD", ICONS.UTIL)
 t16.Section("🔔 Notify (карточки как в Celestial)")
 t16.Toggle("Notify", true, function(v) nf.on = v end, ICONS.UTIL)
 t16.Section("🔊 SoundNotify")
+local labelsSN = {}
+for i, sl in ipairs(SN_SLOTS) do labelsSN[i] = sl.label end
 t16.ToggleDrop("SoundNotify", false, function(v)
     sn.on = v
     if v and not sn.id then X.applySoundNotify(sn.sel) end
-end, ICONS.UTIL, {SN_SLOTS[1].label}, 1, function(i)
+end, ICONS.UTIL, labelsSN, 1, function(i)
     sn.sel = i
     X.applySoundNotify(i)
 end)
