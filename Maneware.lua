@@ -685,15 +685,15 @@ local function removeTarget()
 end
 
 -- Настройки Target ESP (glow, размер, скорость вращения)
-local tgt = {glow = true, size = 0.5, speed = 1.0}
+local tgt = {glow = true, size = 0.5, speed = 1.0, glowStr = 1.0}
 
--- Плоская рамка из 4 красных уголков (как на фото), крепится к телу цели
+-- Плоская рамка из 4 красных уголков + яркое свечение
 local function buildReticle()
     local bb = new("BillboardGui", {Name = "MWTargetBB", Size = UDim2.new(3, 0, 3, 0), AlwaysOnTop = true,
         LightInfluence = 0, Enabled = false})
     local spin = new("Frame", {Size = UDim2.new(1, 0, 1, 0), BackgroundTransparency = 1, Rotation = 25}, bb)
     local glow = new("Frame", {Name = "Glow", Size = UDim2.new(1, 0, 1, 0), BackgroundTransparency = 1}, spin)
-    local lines = {} -- {frame, горизонтальная?, базовая толщина, длина}
+    local lines = {}
     local function corners(parent, color, base, transp, len)
         for _, a in ipairs({Vector2.new(0, 0), Vector2.new(1, 0), Vector2.new(0, 1), Vector2.new(1, 1)}) do
             local hz = new("Frame", {Size = UDim2.new(len, 0, 0, base), Position = UDim2.new(a.X, 0, a.Y, 0), AnchorPoint = a,
@@ -704,13 +704,20 @@ local function buildReticle()
             table.insert(lines, {vt, false, base, len})
         end
     end
-    -- Glow: светящееся гало + толстые полупрозрачные уголки (создаются первыми - лежат под основными)
-    local halo = new("Frame", {Size = UDim2.new(1, 6, 1, 6), Position = UDim2.new(0, -3, 0, -3),
-        BackgroundColor3 = Color3.fromRGB(255, 30, 70), BackgroundTransparency = 0.86, BorderSizePixel = 0}, glow)
-    corner(6, halo)
-    new("UIStroke", {Color = Color3.fromRGB(255, 40, 80), Thickness = 5, Transparency = 0.5}, halo)
-    corners(glow, Color3.fromRGB(255, 50, 90), 11, 0.5, 0.40)
-    corners(spin, Color3.fromRGB(255, 80, 110), 3, 0, 0.34) -- основные уголки
+    -- Яркое многослойное свечение
+    local haloOuter = new("Frame", {Size = UDim2.new(1, 18, 1, 18), Position = UDim2.new(0, -9, 0, -9),
+        BackgroundColor3 = Color3.fromRGB(255, 20, 60), BackgroundTransparency = 0.92, BorderSizePixel = 0}, glow)
+    corner(12, haloOuter)
+    new("UIStroke", {Color = Color3.fromRGB(255, 40, 80), Thickness = 8, Transparency = 0.65}, haloOuter)
+    local halo = new("Frame", {Size = UDim2.new(1, 8, 1, 8), Position = UDim2.new(0, -4, 0, -4),
+        BackgroundColor3 = Color3.fromRGB(255, 40, 80), BackgroundTransparency = 0.78, BorderSizePixel = 0}, glow)
+    corner(8, halo)
+    new("UIStroke", {Color = Color3.fromRGB(255, 80, 120), Thickness = 4, Transparency = 0.35}, halo)
+    local core = new("Frame", {Size = UDim2.new(1, 0, 1, 0),
+        BackgroundColor3 = Color3.fromRGB(255, 60, 100), BackgroundTransparency = 0.88, BorderSizePixel = 0}, glow)
+    corner(6, core)
+    corners(glow, Color3.fromRGB(255, 50, 90), 12, 0.45, 0.42)
+    corners(spin, Color3.fromRGB(255, 90, 120), 3, 0, 0.36)
     return bb, spin, glow, lines
 end
 
@@ -732,7 +739,20 @@ local function applyTarget()
             local sz = 6 * tgt.size
             bb.Size = UDim2.new(sz, 0, sz, 0)
             glow.Visible = tgt.glow
-            -- вдали линии тоньше (но не сильно): x0.5 на 90 стадах, x1.2 вблизи
+            -- Сила свечения
+            if tgt.glow then
+                local gs = math.clamp(tgt.glowStr or 1, 0.3, 2)
+                for _, ch in ipairs(glow:GetChildren()) do
+                    if ch:IsA("Frame") then
+                        local baseT = ch:GetAttribute("BaseT")
+                        if not baseT then
+                            baseT = ch.BackgroundTransparency
+                            ch:SetAttribute("BaseT", baseT)
+                        end
+                        ch.BackgroundTransparency = math.clamp(baseT / gs, 0.2, 0.98)
+                    end
+                end
+            end
             local dist = (r.Position - Camera.CFrame.Position).Magnitude
             local k = math.clamp((22 / math.max(dist, 8)) ^ 0.5, 0.5, 1.2)
             for _, ln in ipairs(lines) do
@@ -931,7 +951,9 @@ RunService.Stepped:Connect(function()
 end)
 
 local fpsSaved = {}
+local fpsConn = nil
 local function fpsBoost(on)
+    if fpsConn then fpsConn:Disconnect() fpsConn = nil end
     if on then
         fpsSaved = {}
         local function save(inst, prop, val)
@@ -941,28 +963,69 @@ local function fpsBoost(on)
                 table.insert(fpsSaved, {inst, prop, old})
             end)
         end
+        -- Максимальный potato / soap mode
+        pcall(function()
+            settings().Rendering.QualityLevel = Enum.QualityLevel.Level01
+            settings().Rendering.MeshPartDetailLevel = Enum.MeshPartDetailLevel.Level01
+            settings().Rendering.EagerBulkExecution = true
+        end)
         save(Lighting, "GlobalShadows", false)
-        save(settings().Rendering, "QualityLevel", Enum.QualityLevel.Level01)
+        save(Lighting, "FogEnd", 200)
+        save(Lighting, "Brightness", 1)
+        save(Lighting, "OutdoorAmbient", Color3.fromRGB(128, 128, 128))
+        save(Lighting, "Ambient", Color3.fromRGB(100, 100, 100))
+        save(Lighting, "Technology", Enum.Technology.Compatibility)
         for _, v in ipairs(Lighting:GetChildren()) do
-            if v:IsA("PostEffect") or v:IsA("Atmosphere") then
-                if v:IsA("PostEffect") then save(v, "Enabled", false) end
+            if v:IsA("PostEffect") then save(v, "Enabled", false)
+            elseif v:IsA("Atmosphere") then save(v, "Density", 0)
+            elseif v:IsA("Sky") then save(v, "Parent", nil) end
+        end
+        local function strip(obj)
+            for _, v in ipairs(obj:GetDescendants()) do
+                if v:IsA("ParticleEmitter") or v:IsA("Trail") or v:IsA("Smoke") or v:IsA("Fire")
+                    or v:IsA("Sparkles") or v:IsA("Beam") or v:IsA("PointLight")
+                    or v:IsA("SpotLight") or v:IsA("SurfaceLight") then
+                    save(v, "Enabled", false)
+                elseif v:IsA("Decal") or v:IsA("Texture") then
+                    save(v, "Transparency", 1)
+                elseif v:IsA("MeshPart") then
+                    pcall(function() v.TextureID = "" end)
+                    save(v, "Material", Enum.Material.SmoothPlastic)
+                elseif v:IsA("BasePart") and not v:IsA("Terrain") then
+                    save(v, "Material", Enum.Material.SmoothPlastic)
+                    save(v, "Reflectance", 0)
+                    if v.Material == Enum.Material.Glass or v.Material == Enum.Material.ForceField then
+                        save(v, "Transparency", math.min(v.Transparency + 0.3, 1))
+                    end
+                end
             end
         end
-        for _, v in ipairs(workspace:GetDescendants()) do
-            if v:IsA("ParticleEmitter") or v:IsA("Trail") or v:IsA("Smoke") or v:IsA("Fire") or v:IsA("Sparkles") then
-                save(v, "Enabled", false)
+        pcall(strip, workspace)
+        -- Периодически чистим новые эффекты
+        fpsConn = RunService.Heartbeat:Connect(function()
+            if not on then return end
+            for _, v in ipairs(workspace:GetDescendants()) do
+                if (v:IsA("ParticleEmitter") or v:IsA("Trail") or v:IsA("Smoke") or v:IsA("Fire")
+                    or v:IsA("Sparkles") or v:IsA("Beam")) and v.Enabled then
+                    pcall(function() v.Enabled = false end)
+                end
             end
-        end
+        end)
+        notify("FPS Boost: potato mode")
     else
         for _, s in ipairs(fpsSaved) do pcall(function() s[1][s[2]] = s[3] end) end
         fpsSaved = {}
+        pcall(function()
+            settings().Rendering.QualityLevel = Enum.QualityLevel.Automatic
+        end)
+        notify("FPS Boost: выкл")
     end
 end
 
 --------------------------------------------------
 -- SHERIFF AIM
 --------------------------------------------------
-local aim = {on = false, visible = true, predict = true, strength = 100, range = 250, cd = 1.0, last = 0}
+local aim = {on = false, visible = true, predict = true, strength = 100, range = 250, cd = 1.0, last = 0, hacker = false}
 local BULLET_SPEED = 1500 -- пуля MM2 мгновенная (hitscan): упреждаем только на задержку сети
 local aimBusy = false
 
@@ -973,10 +1036,10 @@ local function hasGun()
     return bp and bp:FindFirstChild("Gun") ~= nil
 end
 
-local function isVisible(targetChar)
-    local head = targetChar:FindFirstChild("Head") or targetChar:FindFirstChild("HumanoidRootPart")
-    if not head then return false end
-    local _, onScreen = Camera:WorldToViewportPoint(head.Position)
+-- Проверка видимости конкретной части (хитбокс)
+local function partVisible(part)
+    if not part then return false end
+    local _, onScreen = Camera:WorldToViewportPoint(part.Position)
     if not onScreen then return false end
     local ignore = {}
     for _, p in ipairs(Players:GetPlayers()) do
@@ -986,7 +1049,30 @@ local function isVisible(targetChar)
     params.FilterType = Enum.RaycastFilterType.Exclude
     params.FilterDescendantsInstances = ignore
     local origin = Camera.CFrame.Position
-    return workspace:Raycast(origin, head.Position - origin, params) == nil
+    local hit = workspace:Raycast(origin, part.Position - origin, params)
+    return hit == nil
+end
+
+local function isVisible(targetChar)
+    local head = targetChar:FindFirstChild("Head") or targetChar:FindFirstChild("HumanoidRootPart")
+    return partVisible(head)
+end
+
+-- Лучшая видимая часть хитбокса (Head > Torso/UpperTorso > HRP)
+local function bestHitPart(char)
+    if not char then return nil end
+    local order = {"Head", "UpperTorso", "Torso", "HumanoidRootPart", "LowerTorso"}
+    local firstAny = nil
+    for _, name in ipairs(order) do
+        local p = char:FindFirstChild(name)
+        if p and p:IsA("BasePart") then
+            if not firstAny then firstAny = p end
+            if partVisible(p) then return p end
+        end
+    end
+    -- Hacker / wallbang: стреляем даже сквозь стены в лучшую часть
+    if aim.hacker then return firstAny or char:FindFirstChild("HumanoidRootPart") end
+    return nil
 end
 
 -- Трекер реальной скорости игроков (точнее, чем AssemblyLinearVelocity)
@@ -1037,13 +1123,9 @@ local function predictAt(part, speed, strength)
 end
 
 local function predictPos(hrp)
-    -- Целимся в хитбокс мардера: предпочитаем Head (лучше регистрация попаданий), иначе HRP
-    local targetPart = hrp
+    -- Целимся в видимую часть хитбокса (или любую при Hacker)
     local char = hrp.Parent
-    if char then
-        local head = char:FindFirstChild("Head")
-        if head and head:IsA("BasePart") then targetPart = head end
-    end
+    local targetPart = bestHitPart(char) or hrp
     if not aim.predict then return targetPart.Position end
     return predictAt(targetPart, BULLET_SPEED, aim.strength / 100)
 end
@@ -1095,7 +1177,10 @@ RunService.Heartbeat:Connect(function()
     local mhum = mc and mc:FindFirstChildOfClass("Humanoid")
     if not mh or not mhum or mhum.Health <= 0 then return end
     if (mh.Position - myH.Position).Magnitude > aim.range then return end
-    if aim.visible and not isVisible(mc) then return end
+    -- Visible check: без Hacker — только если есть видимая часть; с Hacker — всегда
+    local hitPart = bestHitPart(mc)
+    if not hitPart then return end
+    if aim.visible and not aim.hacker and not partVisible(hitPart) then return end
     aimBusy = true
     aim.last = os.clock()
     task.spawn(function()
@@ -2243,10 +2328,13 @@ end -- конец блока watermark
 --------------------------------------------------
 local nf = {on = true}
 local sn = {on = false, sel = 1, id = nil}
+-- Звуки уведомлений (короткие UI-клики / enable-disable как в клиентах)
 local SN_SLOTS = {
-    {key = "click1", label = "Click 1", q = "ui click button", id = 6895079853},
-    {key = "click2", label = "Click 2", q = "soft click sound", id = 9118823101},
-    {key = "click3", label = "Click 3", q = "notification click", id = 6042053626},
+    {key = "click1", label = "Click 1", q = "ui click", id = 6895079853},
+    {key = "click2", label = "Click 2", q = "button click soft", id = 9118823101},
+    {key = "click3", label = "Click 3", q = "notification popup", id = 6042053626},
+    {key = "click4", label = "Click 4 (soft)", q = "soft ui", id = 12222216},
+    {key = "click5", label = "Click 5 (pop)", q = "pop click", id = 4612375305},
 }
 local grad = {on = false, sel = 1}
 
@@ -2599,6 +2687,7 @@ end, ICONS.TARGET)
 t2.Toggle("Target: Glow (свечение)", true, function(v) tgt.glow = v end, ICONS.TARGET)
 t2.Slider("Target: Size", 0.10, 1, 0.5, "", function(v) tgt.size = v end, 0.05)
 t2.Slider("Target: Speed", 0.50, 2, 1.00, "x", function(v) tgt.speed = v end, 0.05)
+t2.Slider("Target: Glow Strength", 0.3, 2, 1, "x", function(v) tgt.glowStr = v end, 0.1)
 t2.Toggle("China Hat", false, function(v)
     hatEnabled = v
     if v then applyHat(myChar()) else removeHat() end
@@ -2608,6 +2697,7 @@ end, ICONS.HAT)
 t3.Section("🎯 Sheriff Aim")
 t3.Toggle("Sheriff Aim (авто-выстрел в убийцу)", false, function(v) aim.on = v end, ICONS.AIM)
 t3.Toggle("Visible Check (вкл: только если виден / выкл: сквозь стены)", true, function(v) aim.visible = v end, ICONS.EYE)
+t3.Toggle("Hacker (пуля сквозь стены)", false, function(v) aim.hacker = v end, ICONS.SHIELD)
 t3.Toggle("Предсказание (куда прибежит) / выкл: прямо в него", true, function(v) aim.predict = v end, ICONS.TARGET)
 t3.Slider("Сила предсказания", 0, 200, 100, "%", function(v) aim.strength = v end)
 t3.Slider("Дальность", 50, 500, 250, " st", function(v) aim.range = v end)
@@ -2832,7 +2922,14 @@ t16.Section("🎨 Gradients (весь HUD, ESP не меняется)")
 t16.ToggleDrop("Gradients", false, function(v)
     grad.on = v
     X.applyTheme()
-end, ICONS.EYE, {"Мятный", "Конфета (бирюзовый + фиолетовый)", "Серый + белый"}, 1, function(i)
+end, ICONS.EYE, {
+    "Мятный",
+    "Конфета (бирюзовый + фиолетовый)",
+    "Серый + белый",
+    "Кровавый",
+    "Океан",
+    "Закат",
+}, 1, function(i)
     grad.sel = i
     if grad.on then X.applyTheme() end
 end)
@@ -3227,6 +3324,27 @@ local THEMES = {
         el = {Color3.fromRGB(58, 58, 64), Color3.fromRGB(112, 112, 122)},
         acc = {Color3.fromRGB(215, 215, 225), Color3.fromRGB(160, 160, 170)},
         card = Color3.fromRGB(50, 50, 56)},
+    {name = "blood",
+        bg = {Color3.fromRGB(28, 8, 12), Color3.fromRGB(60, 14, 22)},
+        side = {Color3.fromRGB(36, 10, 16), Color3.fromRGB(80, 18, 28)},
+        top = {Color3.fromRGB(48, 12, 20), Color3.fromRGB(110, 25, 40)},
+        el = {Color3.fromRGB(42, 12, 18), Color3.fromRGB(90, 22, 34)},
+        acc = {Color3.fromRGB(255, 60, 80), Color3.fromRGB(200, 30, 50)},
+        card = Color3.fromRGB(32, 10, 14)},
+    {name = "ocean",
+        bg = {Color3.fromRGB(6, 20, 40), Color3.fromRGB(10, 50, 90)},
+        side = {Color3.fromRGB(8, 28, 52), Color3.fromRGB(14, 60, 110)},
+        top = {Color3.fromRGB(12, 40, 70), Color3.fromRGB(20, 80, 140)},
+        el = {Color3.fromRGB(10, 34, 60), Color3.fromRGB(18, 70, 120)},
+        acc = {Color3.fromRGB(40, 200, 255), Color3.fromRGB(20, 140, 220)},
+        card = Color3.fromRGB(8, 24, 48)},
+    {name = "sunset",
+        bg = {Color3.fromRGB(40, 18, 10), Color3.fromRGB(80, 30, 20)},
+        side = {Color3.fromRGB(50, 22, 12), Color3.fromRGB(100, 40, 25)},
+        top = {Color3.fromRGB(70, 30, 15), Color3.fromRGB(140, 55, 30)},
+        el = {Color3.fromRGB(60, 26, 14), Color3.fromRGB(120, 48, 28)},
+        acc = {Color3.fromRGB(255, 140, 50), Color3.fromRGB(255, 80, 40)},
+        card = Color3.fromRGB(45, 20, 12)},
 }
 local BASE = {bg = C.BG, side = C.SIDEBAR, top = C.TOPBAR, el = C.ELEMENT, acc = C.ACCENT}
 local WHITE = Color3.new(1, 1, 1)
