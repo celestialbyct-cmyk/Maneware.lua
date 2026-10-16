@@ -548,6 +548,7 @@ local hatEnabled, hat = false, nil
 local gunEsp, coinEsp = false, false
 local infJump, antiAfk, antiFling = false, true, false
 local noclipUser = false
+local spinbot = {on = false, speed = 20} -- speed 1-50 (обороты/сек примерно)
 
 --------------------------------------------------
 -- ESP РОЛЕЙ
@@ -608,10 +609,19 @@ local function toggleNoclip(state)
     end
 end
 
-RunService.Heartbeat:Connect(function()
+RunService.Heartbeat:Connect(function(dt)
     if speedEnabled then
         local h = myHum()
         if h and h.WalkSpeed ~= speedValue then h.WalkSpeed = speedValue end
+    end
+    -- Spinbot: вращение персонажа вокруг оси Y
+    if spinbot.on then
+        local hrp = myHrp()
+        if hrp then
+            -- speed 1–50 ≈ 1–50 оборотов в секунду
+            local ang = math.rad(spinbot.speed * 360 * (dt or 0.016))
+            hrp.CFrame = hrp.CFrame * CFrame.Angles(0, ang, 0)
+        end
     end
 end)
 
@@ -2028,6 +2038,12 @@ local function resolveSoundSlot(slot)
     local key = "audio:" .. slot.key
     local id = assetCache[key]
     if id and audioOk(id) then return id end
+    -- встроенный ID (Click 1/2/3) — пробуем сразу
+    if slot.id and audioOk(slot.id) then
+        assetCache[key] = slot.id
+        saveAssets()
+        return slot.id
+    end
     local ids = searchAssets("audio", slot.q)
     for i = 1, math.min(#ids, 12) do
         if audioOk(ids[i]) then
@@ -2036,7 +2052,7 @@ local function resolveSoundSlot(slot)
             return ids[i]
         end
     end
-    return nil
+    return slot.id -- fallback даже если audioOk не прошёл (на некоторых executor)
 end
 
 local function applySoundSlot(i)
@@ -2228,9 +2244,9 @@ end -- конец блока watermark
 local nf = {on = true}
 local sn = {on = false, sel = 1, id = nil}
 local SN_SLOTS = {
-    {key = "click1", label = "Click 1", q = "ui click button"},
-    {key = "click2", label = "Click 2", q = "soft click sound"},
-    {key = "click3", label = "Click 3", q = "notification click"},
+    {key = "click1", label = "Click 1", q = "ui click button", id = 6895079853},
+    {key = "click2", label = "Click 2", q = "soft click sound", id = 9118823101},
+    {key = "click3", label = "Click 3", q = "notification click", id = 6042053626},
 }
 local grad = {on = false, sel = 1}
 
@@ -2551,6 +2567,8 @@ t1.Toggle("Fly (джойстик + ▲▼)", false, function(v)
 end, ICONS.FLY)
 t1.Slider("Скорость полёта", 10, 150, 50, " st/s", function(v) flySpeed = v end)
 t1.Toggle("Infinite Jump", false, function(v) infJump = v end, ICONS.FLY)
+t1.Toggle("Spinbot", false, function(v) spinbot.on = v end, ICONS.TARGET)
+t1.Slider("Spinbot: Speed", 1, 50, 20, "", function(v) spinbot.speed = v end)
 
 -- Визуалы
 t2.Section("🎨 ESP")
