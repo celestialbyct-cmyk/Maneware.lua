@@ -1522,7 +1522,7 @@ end)
 -- AUTOFARM МОНЕТ
 --------------------------------------------------
 local farm = {on = false, speed = 30, limit = 40, flingMurd = false, reset = false, walls = true,
-    safe = 0, count = 0, done = false, sessionCoins = 0}
+    safe = 0, count = 0, done = false, sessionCoins = 0, waitGame = true, startTime = 0}
 do -- блок autofarm (локальные переменные живут только тут)
 local coinSkip = setmetatable({}, {__mode = "k"})
 local lastContainer, cachedCC, lastCCScan, lastFarmWarn = nil, nil, 0, 0
@@ -1589,20 +1589,28 @@ end
 local function flyTo(part, coin)
     local h0 = myHrp()
     if not h0 then return false end
-    local limit = (part.Position - h0.Position).Magnitude / math.max(farm.speed, 1) + 3
+    local spd = math.clamp(tonumber(farm.speed) or 30, 8, 80)
+    local limit = (part.Position - h0.Position).Magnitude / spd + 4
     local t0 = os.clock()
     while farm.on and coin.Parent and os.clock() - t0 < limit do
         local h = myHrp()
         if not h then return false end
         local dt = RunService.Heartbeat:Wait()
-        local diff = part.Position - h.Position
+        if dt <= 0 or dt > 0.1 then dt = 1/60 end
+        local targetPos = part.Position + Vector3.new(0, 1.5, 0)
+        local diff = targetPos - h.Position
         local dist = diff.Magnitude
-        if dist < 0.8 then return true end
-        local step = farm.speed * dt
+        if dist < 1.2 then
+            h.CFrame = CFrame.new(targetPos) * h.CFrame.Rotation
+            h.AssemblyLinearVelocity = Vector3.zero
+            h.AssemblyAngularVelocity = Vector3.zero
+            return true
+        end
+        local step = spd * dt
         if step >= dist then
-            h.CFrame = CFrame.new(part.Position) * h.CFrame.Rotation
+            h.CFrame = CFrame.new(targetPos) * h.CFrame.Rotation
         else
-            h.CFrame = h.CFrame + diff.Unit * step
+            h.CFrame = CFrame.new(h.Position + diff.Unit * step) * h.CFrame.Rotation
         end
         h.AssemblyLinearVelocity = Vector3.zero
         h.AssemblyAngularVelocity = Vector3.zero
@@ -1631,6 +1639,10 @@ task.spawn(function()
         if farm.on and not farmBusy and not grabBusy and not flingBusy and not killAllBusy then
             farmBusy = true
             local ok, err = pcall(function()
+                -- waitGame: стоим, пока раунд не начался / после ресета ждём новую игру
+                if farm.waitGame and not isGameActive() then
+                    return
+                end
                 local cc = findCoinContainer()
                 if cc ~= lastContainer then -- новый раунд / новая карта
                     lastContainer = cc
@@ -1644,7 +1656,7 @@ task.spawn(function()
                     end
                     return
                 end
-                if farm.done then return end
+                if farm.done then return end -- после лимита + ресета стоим и ждём новую игру
                 local my, hum = myHrp(), myHum()
                 if not my or not hum or hum.Health <= 0 then return end
                 if farm.count > 0 then
@@ -1664,7 +1676,7 @@ task.spawn(function()
                     while os.clock() - t0 < 0.7 do
                         local h = myHrp()
                         if not h then break end
-                        h.CFrame = CFrame.new(part.Position) * h.CFrame.Rotation -- стоим на монете
+                        h.CFrame = CFrame.new(part.Position + Vector3.new(0, 1.2, 0)) * h.CFrame.Rotation
                         h.AssemblyLinearVelocity = Vector3.zero
                         if firetouchinterest then
                             pcall(function()
@@ -1693,33 +1705,58 @@ end)
 
 end -- конец блока autofarm
 
--- Окно автофарма: показывает монеты за сессию
+-- Красивое окно автофарма: монеты + время сессии
 do
     local farmGui = makeGui("ManewareFarmHUD", 99995)
     local farmFrame = new("Frame", {
-        Size = UDim2.new(0, 160, 0, 40),
-        Position = UDim2.new(0.5, -80, 0, 60),
-        BackgroundColor3 = Color3.fromRGB(14, 14, 20),
+        Size = UDim2.new(0, 200, 0, 72),
+        Position = UDim2.new(0.5, -100, 0, 52),
+        BackgroundColor3 = Color3.fromRGB(12, 12, 18),
+        BackgroundTransparency = 0.08,
         BorderSizePixel = 0,
         Visible = false,
         AnchorPoint = Vector2.new(0.5, 0),
     }, farmGui)
-    corner(10, farmFrame)
-    new("UIStroke", {Color = C.ACCENT, Thickness = 1.5}, farmFrame)
-    local farmLbl = new("TextLabel", {
-        Size = UDim2.new(1, -12, 1, 0),
-        Position = UDim2.new(0, 6, 0, 0),
-        BackgroundTransparency = 1,
-        Text = "Монеты: 0",
-        TextColor3 = C.TEXT,
-        TextSize = 14,
-        Font = Enum.Font.GothamBold,
-        TextXAlignment = Enum.TextXAlignment.Center,
+    corner(14, farmFrame)
+    new("UIStroke", {Color = C.ACCENT, Thickness = 2}, farmFrame)
+    local topBar = new("Frame", {Size = UDim2.new(1, 0, 0, 4), BackgroundColor3 = C.ACCENT, BorderSizePixel = 0}, farmFrame)
+    corner(2, topBar)
+    local titleLbl = new("TextLabel", {
+        Size = UDim2.new(1, -16, 0, 22), Position = UDim2.new(0, 8, 0, 10),
+        BackgroundTransparency = 1, Text = "💰 AUTOFARM", TextColor3 = C.ACCENT,
+        TextSize = 13, Font = Enum.Font.GothamBold, TextXAlignment = Enum.TextXAlignment.Left,
     }, farmFrame)
+    local coinsLbl = new("TextLabel", {
+        Size = UDim2.new(1, -16, 0, 18), Position = UDim2.new(0, 8, 0, 32),
+        BackgroundTransparency = 1, Text = "Монеты: 0", TextColor3 = C.TEXT,
+        TextSize = 14, Font = Enum.Font.GothamSemibold, TextXAlignment = Enum.TextXAlignment.Left,
+    }, farmFrame)
+    local timeLbl = new("TextLabel", {
+        Size = UDim2.new(1, -16, 0, 16), Position = UDim2.new(0, 8, 0, 50),
+        BackgroundTransparency = 1, Text = "Время: 00:00", TextColor3 = C.DIM,
+        TextSize = 12, Font = Enum.Font.Gotham, TextXAlignment = Enum.TextXAlignment.Left,
+    }, farmFrame)
+    local function fmtTime(sec)
+        sec = math.max(0, math.floor(sec))
+        return string.format("%02d:%02d", math.floor(sec / 60), sec % 60)
+    end
     RunService.Heartbeat:Connect(function()
         if farm.on then
             farmFrame.Visible = true
-            farmLbl.Text = "Монеты за сессию: " .. tostring(farm.sessionCoins or 0)
+            coinsLbl.Text = "Монеты: " .. tostring(farm.sessionCoins or 0)
+            local st = farm.startTime or 0
+            if st > 0 then
+                timeLbl.Text = "Время: " .. fmtTime(os.clock() - st)
+            else
+                timeLbl.Text = "Время: 00:00"
+            end
+            if farm.waitGame and not isGameActive() then
+                titleLbl.Text = "⏳ Ждём игру…"
+            elseif farm.done then
+                titleLbl.Text = "✅ Лимит / ждём"
+            else
+                titleLbl.Text = "💰 AUTOFARM"
+            end
         else
             farmFrame.Visible = false
         end
@@ -2204,6 +2241,14 @@ local function previewSound()
 end
 
 --------------------------------------------------
+-- NAME PROTECT: визуально скрывает ник (watermark / где возможно)
+--------------------------------------------------
+local np = {on = false, text = "Hidden"}
+local function displayName()
+    if np.on and np.text and np.text ~= "" then return tostring(np.text) end
+    return LocalPlayer.Name
+end
+
 -- WATERMARK: 4 стиля (по скриншотам)
 --------------------------------------------------
 local wm = {on = false, style = 1, size = 5}
@@ -2247,7 +2292,7 @@ local function wmStyle1(root)
     local tl = new("TextLabel", {AutomaticSize = XY, BackgroundTransparency = 1, Text = "", TextColor3 = Color3.new(1, 1, 1),
         TextSize = 14, Font = Enum.Font.GothamBold}, f)
     return function()
-        tl.Text = string.format("MANEWARE » %s » UID: %d » %s", string.upper(LocalPlayer.Name), UID, mskTime())
+        tl.Text = string.format("MANEWARE » %s » UID: %d » %s", string.upper(displayName()), UID, mskTime())
     end
 end
 
@@ -2316,7 +2361,7 @@ local function wmStyle4(root)
     return function()
         lPing.Text = getPing() .. "MS"
         lMem.Text = getMem() .. " mb"
-        lNick.Text = LocalPlayer.Name
+        lNick.Text = displayName()
         lPlace.Text = "Загадка убийства 2"
     end
 end
@@ -2715,6 +2760,17 @@ t5.Section("🛠 Утилиты")
 t5.Toggle("Anti-AFK", true, function(v) antiAfk = v end, ICONS.UTIL)
 t5.Toggle("Anti-Fling", false, function(v) antiFling = v end, ICONS.SHIELD)
 t5.Toggle("FPS Boost", false, fpsBoost, ICONS.SPEED)
+t5.Section("👁 NameProtect")
+t5.Toggle("NameProtect", false, function(v) np.on = v end, ICONS.EYE)
+local npBox = t5.TextBox("Текст вместо ника (можно русский)")
+npBox.Text = np.text
+t5.Button("✔ Применить текст NameProtect", function()
+    local t = tostring(npBox.Text or ""):gsub("^%s+", ""):gsub("%s+$", "")
+    if t == "" then notify("Введи текст") return end
+    np.text = t
+    notify("NameProtect: " .. t)
+    if wm.on then pcall(wmRebuild) end
+end)
 
 -- GrabGun во вкладке "Шериф"
 t3.Section("🔫 Пистолет")
@@ -2735,11 +2791,18 @@ local t7 = addTab("Автофарм", ICONS.COIN)
 t7.Section("💰 Autofarm монет")
 t7.Toggle("Autofarm", false, function(v)
     farm.on = v
-    if v then farm.sessionCoins = 0 end -- новая сессия при включении
-    if not v then toggleNoclip(noclipUser or flyEnabled) end
+    if v then
+        farm.sessionCoins = 0
+        farm.startTime = os.clock()
+        farm.done = false
+    else
+        farm.startTime = 0
+        toggleNoclip(noclipUser or flyEnabled)
+    end
 end, ICONS.COIN)
 t7.Slider("Скорость фарма", 16, 50, 30, " st/s", function(v) farm.speed = v end)
 t7.Slider("Лимит монет (мешок)", 10, 60, 40, "", function(v) farm.limit = v end)
+t7.Toggle("Проверка на игру (ждать раунд)", true, function(v) farm.waitGame = v end, ICONS.UTIL)
 t7.Toggle("Fling Murderer после лимита", false, function(v) farm.flingMurd = v end, ICONS.FLING)
 t7.Toggle("Reset после лимита", false, function(v) farm.reset = v end, ICONS.UTIL)
 t7.Toggle("Лететь сквозь стены (NoClip)", true, function(v) farm.walls = v end, ICONS.NOCLIP)
@@ -2785,6 +2848,66 @@ t10.Button("▶ Проверить эффекты (на мне)", function()
     if not (fx.ghost or fx.lightning or fx.star) then notify("Включи хотя бы один эффект") return end
     fxDeath(ch, h.Position)
 end)
+
+-- DupeVote
+local MM2_MAPS = {
+    "Factory", "House 2", "Hotel", "Office", "Hospital", "Milbase", "Bank",
+    "Police Station", "Workplace", "Research Facility", "Mansion 2", "Bio Lab",
+    "Nook's Cranny", "Beach House", "Ski Lodge", "Casino", "Library", "Christmas House",
+    "Ice Castle", "Village", "Colosseum", "Zoo", "Train Station", "Workshop",
+}
+local dupe = {map = 1, amount = 5, busy = false}
+local function doDupeVote()
+    if dupe.busy then notify("DupeVote уже идёт") return end
+    dupe.busy = true
+    task.spawn(function()
+        local mapName = MM2_MAPS[dupe.map] or MM2_MAPS[1]
+        local amt = math.clamp(math.floor(tonumber(dupe.amount) or 5), 1, 40)
+        notify("DupeVote: " .. mapName .. " x" .. amt)
+        local remotes = {}
+        pcall(function()
+            for _, d in ipairs(game:GetDescendants()) do
+                if (d:IsA("RemoteEvent") or d:IsA("RemoteFunction")) then
+                    local n = d.Name:lower()
+                    if n:find("vote") or n:find("map") or n:find("cast") then
+                        table.insert(remotes, d)
+                    end
+                end
+            end
+        end)
+        local sent = 0
+        for i = 1, amt do
+            for _, r in ipairs(remotes) do
+                pcall(function()
+                    if r:IsA("RemoteEvent") then
+                        r:FireServer(mapName)
+                        r:FireServer(dupe.map)
+                        r:FireServer(mapName, true)
+                        sent += 1
+                    elseif r:IsA("RemoteFunction") then
+                        r:InvokeServer(mapName)
+                        r:InvokeServer(dupe.map)
+                        sent += 1
+                    end
+                end)
+            end
+            task.wait(0.05)
+        end
+        notify(sent > 0 and ("DupeVote: отправлено ~" .. sent) or "DupeVote: ремоуты голосования не найдены (жди экран выбора карты)")
+        dupe.busy = false
+    end)
+end
+
+local tDV = addTab("DupeVote", ICONS.UTIL)
+tDV.Section("🗳 DupeVote (дублирует голос за карту)")
+local mapLabels = {}
+for i, n in ipairs(MM2_MAPS) do mapLabels[i] = n end
+tDV.ToggleDrop("Карта", true, function() end, ICONS.TP, mapLabels, 1, function(i)
+    dupe.map = i
+    notify("Карта: " .. (MM2_MAPS[i] or "?"))
+end)
+tDV.Slider("Количество голосов", 1, 40, 5, "", function(v) dupe.amount = v end)
+tDV.Button("▶ DupeVote сейчас", doDupeVote)
 
 -- CustomModel
 local t11 = addTab("CustomModel", ICONS.HAT)
@@ -2929,6 +3052,11 @@ end, ICONS.EYE, {
     "Кровавый",
     "Океан",
     "Закат",
+    "Неон",
+    "Золото",
+    "Лёд",
+    "Роза",
+    "Токсик",
 }, 1, function(i)
     grad.sel = i
     if grad.on then X.applyTheme() end
@@ -2956,6 +3084,10 @@ local function cfgSave(name)
     pcall(function() if not isfolder(CFG_DIR) then makefolder(CFG_DIR) end end)
     local data = {}
     for key, e in pairs(REG) do data[key] = e.get() end
+    -- позиции UI / биндов (если уже созданы)
+    if X.collectUI then
+        data._ui = X.collectUI()
+    end
     local ok = pcall(function()
         writefile(CFG_DIR .. "/" .. name .. ".json", HttpService:JSONEncode(data))
     end)
@@ -2968,8 +3100,13 @@ local function cfgLoad(name)
     end)
     if not ok or type(data) ~= "table" then notify("Не удалось загрузить") return end
     for key, val in pairs(data) do
-        local e = REG[key]
-        if e then pcall(e.set, val, true) end
+        if key ~= "_ui" then
+            local e = REG[key]
+            if e then pcall(e.set, val, true) end
+        end
+    end
+    if data._ui and X.applyUI then
+        pcall(X.applyUI, data._ui)
     end
     activeCfg = name
     notify("Загружен: " .. name)
@@ -3122,6 +3259,28 @@ local function saveUI()
     for name, b in pairs(bindButtons) do d.binds[name] = posToTbl(b.Position) end
     uiData = d
     writeJson("ui.json", d)
+end
+
+-- для конфигов: сохраняем/загружаем позиции FAB, watermark, биндов
+X.collectUI = function()
+    local d = {fab = posToTbl(fab.Position), wm = posToTbl(wmRoot.Position), binds = {}}
+    for name, b in pairs(bindButtons) do d.binds[name] = posToTbl(b.Position) end
+    return d
+end
+X.applyUI = function(d)
+    if type(d) ~= "table" then return end
+    if d.fab then pcall(function() fab.Position = tblToPos(d.fab) end) end
+    if d.wm then pcall(function() wmRoot.Position = tblToPos(d.wm) end) end
+    if type(d.binds) == "table" then
+        for name, t in pairs(d.binds) do
+            if bindButtons[name] then
+                pcall(function() bindButtons[name].Position = tblToPos(t) end)
+            else
+                pcall(createBind, name, tblToPos(t))
+            end
+        end
+    end
+    saveUI()
 end
 
 local bindStates = {}
@@ -3345,6 +3504,41 @@ local THEMES = {
         el = {Color3.fromRGB(60, 26, 14), Color3.fromRGB(120, 48, 28)},
         acc = {Color3.fromRGB(255, 140, 50), Color3.fromRGB(255, 80, 40)},
         card = Color3.fromRGB(45, 20, 12)},
+    {name = "neon",
+        bg = {Color3.fromRGB(8, 8, 18), Color3.fromRGB(20, 10, 40)},
+        side = {Color3.fromRGB(12, 12, 28), Color3.fromRGB(30, 15, 55)},
+        top = {Color3.fromRGB(20, 15, 40), Color3.fromRGB(50, 25, 90)},
+        el = {Color3.fromRGB(18, 14, 36), Color3.fromRGB(40, 22, 70)},
+        acc = {Color3.fromRGB(0, 255, 170), Color3.fromRGB(180, 0, 255)},
+        card = Color3.fromRGB(14, 10, 28)},
+    {name = "gold",
+        bg = {Color3.fromRGB(28, 22, 8), Color3.fromRGB(50, 40, 12)},
+        side = {Color3.fromRGB(36, 28, 10), Color3.fromRGB(65, 50, 16)},
+        top = {Color3.fromRGB(50, 38, 12), Color3.fromRGB(90, 70, 20)},
+        el = {Color3.fromRGB(42, 32, 10), Color3.fromRGB(75, 58, 18)},
+        acc = {Color3.fromRGB(255, 210, 60), Color3.fromRGB(220, 160, 30)},
+        card = Color3.fromRGB(32, 24, 8)},
+    {name = "ice",
+        bg = {Color3.fromRGB(12, 22, 32), Color3.fromRGB(24, 48, 68)},
+        side = {Color3.fromRGB(16, 30, 42), Color3.fromRGB(30, 58, 80)},
+        top = {Color3.fromRGB(22, 42, 58), Color3.fromRGB(40, 80, 110)},
+        el = {Color3.fromRGB(18, 34, 48), Color3.fromRGB(34, 64, 90)},
+        acc = {Color3.fromRGB(160, 230, 255), Color3.fromRGB(80, 180, 240)},
+        card = Color3.fromRGB(14, 26, 38)},
+    {name = "rose",
+        bg = {Color3.fromRGB(32, 12, 22), Color3.fromRGB(60, 20, 40)},
+        side = {Color3.fromRGB(40, 14, 28), Color3.fromRGB(75, 25, 50)},
+        top = {Color3.fromRGB(55, 18, 36), Color3.fromRGB(100, 35, 65)},
+        el = {Color3.fromRGB(48, 16, 32), Color3.fromRGB(85, 28, 55)},
+        acc = {Color3.fromRGB(255, 120, 180), Color3.fromRGB(220, 60, 120)},
+        card = Color3.fromRGB(36, 14, 26)},
+    {name = "toxic",
+        bg = {Color3.fromRGB(12, 28, 8), Color3.fromRGB(24, 55, 12)},
+        side = {Color3.fromRGB(16, 36, 10), Color3.fromRGB(32, 70, 16)},
+        top = {Color3.fromRGB(22, 48, 12), Color3.fromRGB(45, 95, 22)},
+        el = {Color3.fromRGB(18, 40, 10), Color3.fromRGB(38, 80, 18)},
+        acc = {Color3.fromRGB(120, 255, 40), Color3.fromRGB(60, 200, 20)},
+        card = Color3.fromRGB(14, 32, 8)},
 }
 local BASE = {bg = C.BG, side = C.SIDEBAR, top = C.TOPBAR, el = C.ELEMENT, acc = C.ACCENT}
 local WHITE = Color3.new(1, 1, 1)
@@ -3458,3 +3652,4 @@ if not okUI then
 end
 
 print("[Maneware] v9 загружен")
+ 
