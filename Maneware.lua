@@ -648,8 +648,8 @@ RunService.RenderStepped:Connect(function(dt)
     local cf = Camera.CFrame
     local rel = cf:VectorToObjectSpace(hum.MoveDirection)
     local dir = cf.LookVector * -rel.Z + cf.RightVector * rel.X
-    if UIS:IsKeyDown(Enum.KeyCode.Space) or flyUp then dir += Vector3.yAxis end
-    if UIS:IsKeyDown(Enum.KeyCode.LeftShift) or flyDown then dir -= Vector3.yAxis end
+    if UIS:IsKeyDown(Enum.KeyCode.Space) or flyUp then dir = dir + Vector3.yAxis end
+    if UIS:IsKeyDown(Enum.KeyCode.LeftShift) or flyDown then dir = dir - Vector3.yAxis end
     if dir.Magnitude > 0 then
         bodyVel.Velocity = bodyVel.Velocity:Lerp(dir.Unit * flySpeed, math.min(1, dt * 12))
     else
@@ -764,7 +764,7 @@ local function applyTarget()
                 end
             end
             bb.Enabled = true
-            angle += dt * 70 * tgt.speed
+            angle = angle + dt * 70 * tgt.speed
             spin.Rotation = angle % 360
         else
             bb.Enabled = false
@@ -1194,16 +1194,6 @@ end)
 --------------------------------------------------
 local flingBusy = false
 local grabGun, grabBusy, grabLast = false, false, 0
-
-local function sheriffAlive()
-    for _, pl in ipairs(Players:GetPlayers()) do
-        if pl ~= LocalPlayer and getRole(pl) == "Sheriff" then
-            local h = pl.Character and pl.Character:FindFirstChildOfClass("Humanoid")
-            if h and h.Health > 0 then return true end
-        end
-    end
-    return false
-end
 
 -- GunDrop есть в workspace = шериф умер и пистолет ещё не подобрали
 local function doGrabGun()
@@ -1702,7 +1692,7 @@ task.spawn(function()
                         task.wait(0.06)
                     end
                     if got then
-                        farm.count += 1
+                        farm.count = farm.count + 1
                         farm.sessionCoins = (farm.sessionCoins or 0) + 1
                     else
                         coinSkip[coin] = os.clock() + 8
@@ -2418,7 +2408,7 @@ do -- карточки-уведомления: 1 строка - название
     local function makeToast(title, msg, kind)
         local old = active[title]
         if old and old.Parent then old:Destroy() end -- новое уведомление заменяет старое с тем же названием
-        order += 1
+        order = order + 1
         local col = kind == "off" and Color3.fromRGB(239, 68, 68)
             or (kind == "info" and Color3.fromRGB(110, 120, 255) or Color3.fromRGB(80, 220, 120))
         local card = new("Frame", {Size = UDim2.new(1, 0, 0, 54), BackgroundColor3 = X.cardColor or Color3.fromRGB(14, 14, 20),
@@ -2691,8 +2681,9 @@ end)
 
 --------------------------------------------------
 -- v10: NameProtect+, GunModel, KillFeed, JumpCircle
+-- (в отдельной функции: у неё свой лимит локальных переменных)
 --------------------------------------------------
-do
+X.initV10 = function()
 local CoreGui = nil
 pcall(function() CoreGui = game:GetService("CoreGui") end)
 
@@ -2873,7 +2864,7 @@ local kf = {on = false, hideInn = true, hideMur = true, hideShe = true}
 X.kf = kf
 local kfGui = makeGui("ManewareKF", 99994)
 local kfRoot = new("Frame", {Name = "KF", Size = UDim2.new(0, 270, 0, 190), Position = UDim2.new(0, 12, 0.3, 0),
-    BackgroundTransparency = 1, Active = true}, kfGui)
+    BackgroundTransparency = 1, Active = false}, kfGui)
 X.kfRoot = kfRoot
 local kfList = new("Frame", {Size = UDim2.new(1, 0, 1, 0), BackgroundTransparency = 1}, kfRoot)
 new("UIListLayout", {Padding = UDim.new(0, 5), SortOrder = Enum.SortOrder.LayoutOrder,
@@ -2887,7 +2878,7 @@ local function rt(s) return (tostring(s):gsub("&", "&amp;"):gsub("<", "&lt;"):gs
 local function nmOf(pl) if pl == LocalPlayer then return displayName() end return pl.DisplayName end
 local kfOrder, kfCards = 0, {}
 local function kfPush(kName, kRole, vName, vRole)
-    kfOrder += 1
+    kfOrder = kfOrder + 1
     local card = new("Frame", {Size = UDim2.new(1, 0, 0, 30), BackgroundColor3 = Color3.fromRGB(12, 12, 16),
         BackgroundTransparency = 1, BorderSizePixel = 0, LayoutOrder = kfOrder}, kfList)
     corner(8, card)
@@ -3046,6 +3037,7 @@ X.buildNew = function()
     tj.Slider("JumpCircle: Size", 1, 8, 3, " st", function(v) jc.size = v end, 0.5)
 end
 end -- v10 блок
+xpcall(X.initV10, function(e) warn("[Maneware] v10 init: " .. tostring(e)) end)
 
 local function buildUI()
 --------------------------------------------------
@@ -3233,7 +3225,9 @@ local MM2_MAPS = {
     "Ice Castle", "Village", "Colosseum", "Zoo", "Train Station", "Workshop",
 }
 local dupe = {map = 1, amount = 5, busy = false, rec = false, cap = nil, hooked = false}
-pcall(function()
+local function installHook()
+    if dupe.hooked then return true end
+    pcall(function()
     if hookmetamethod and getnamecallmethod then
         local old
         local function hk(self, ...)
@@ -3242,7 +3236,7 @@ pcall(function()
                 if (m == "FireServer" or m == "InvokeServer") and typeof(self) == "Instance" then
                     local n = self.Name:lower()
                     if n:find("vote") or n:find("map") then
-                        dupe.cap = {r = self, m = m, a = table.pack(...)}
+                        dupe.cap = {r = self, m = m, a = {n = select("#", ...), ...}}
                         task.defer(notify, "DupeVote: записан " .. self.Name)
                     end
                 end
@@ -3252,10 +3246,13 @@ pcall(function()
         old = hookmetamethod(game, "__namecall", newcclosure and newcclosure(hk) or hk)
         dupe.hooked = true
     end
-end)
+    end)
+    return dupe.hooked
+end
 
 local function mapArgs(args)
-    local out = table.pack(table.unpack(args, 1, args.n))
+    local out = {n = args.n}
+    for i = 1, args.n do out[i] = args[i] end
     local mapName = MM2_MAPS[dupe.map]
     for i = 1, out.n do
         if type(out[i]) == "string" then
@@ -3303,10 +3300,10 @@ local function doDupeVote()
             for _ = 1, amt do
                 local a = mapArgs(cap.a)
                 if cap.m == "FireServer" then
-                    if pcall(function() cap.r:FireServer(table.unpack(a, 1, a.n)) end) then sent += 1 end
+                    if pcall(function() cap.r:FireServer((table.unpack or unpack)(a, 1, a.n)) end) then sent = sent + 1 end
                 else
-                    task.spawn(function() pcall(function() cap.r:InvokeServer(table.unpack(a, 1, a.n)) end) end)
-                    sent += 1
+                    task.spawn(function() pcall(function() cap.r:InvokeServer((table.unpack or unpack)(a, 1, a.n)) end) end)
+                    sent = sent + 1
                 end
                 task.wait(0.05)
             end
@@ -3318,7 +3315,7 @@ local function doDupeVote()
                 for _, d in ipairs(pg:GetDescendants()) do
                     if d:IsA("GuiButton") and btnMatches(d, mapName) then
                         for _ = 1, amt do
-                            if clickBtn(d) then sent += 1 end
+                            if clickBtn(d) then sent = sent + 1 end
                             task.wait(0.05)
                         end
                         break
@@ -3337,7 +3334,7 @@ local function doDupeVote()
                             else
                                 task.spawn(function() pcall(function() d:InvokeServer(mapName) end) end)
                             end
-                            sent += 1
+                            sent = sent + 1
                             task.wait(0.05)
                         end
                     end
@@ -3359,7 +3356,7 @@ tDV.ToggleDrop("Карта", true, function() end, ICONS.TP, mapLabels, 1, funct
 end)
 tDV.Slider("Количество голосов", 1, 40, 5, "", function(v) dupe.amount = v end)
 tDV.Toggle("DupeVote: запись (проголосуй вручную)", false, function(v)
-    if v and not dupe.hooked then notify("DupeVote: нет hookmetamethod") return end
+    if v and not installHook() then notify("DupeVote: нет hookmetamethod") return end
     dupe.rec = v
     if v then dupe.cap = nil notify("DupeVote: проголосуй за любую карту") end
 end, ICONS.UTIL)
@@ -3519,7 +3516,7 @@ end, ICONS.EYE, {
 end)
 
 -- v10: GunModel и JumpCircle
-X.buildNew()
+if X.buildNew then pcall(X.buildNew) end
 
 -- Configs
 local t9 = addTab("Configs", ICONS.UTIL)
@@ -3681,7 +3678,7 @@ if uiData.kf then pcall(function() X.kfRoot.Position = tblToPos(uiData.kf) end) 
 -- Watermark
 local wmGui = makeGui("ManewareWM", 99996)
 local wmRoot = new("Frame", {Name = "WM", AutomaticSize = Enum.AutomaticSize.XY, Size = UDim2.new(0, 0, 0, 0),
-    BackgroundTransparency = 1, Active = true, Visible = false, AnchorPoint = Vector2.new(0.5, 0),
+    BackgroundTransparency = 1, Active = false, Visible = false, AnchorPoint = Vector2.new(0.5, 0),
     Position = UDim2.new(0.5, 0, 0, 14)}, wmGui)
 if uiData.wm then pcall(function() wmRoot.Position = tblToPos(uiData.wm) end) end
 local wmScale = new("UIScale", {Scale = 1}, wmRoot)
@@ -3763,7 +3760,7 @@ local function createBind(name, pos)
     local run, getState = bindInfo(name)
     if not run then return false end
     local n = 0
-    for _ in pairs(bindButtons) do n += 1 end
+    for _ in pairs(bindButtons) do n = n + 1 end
     local btn = new("TextButton", {Size = UDim2.new(0, 70, 0, 42),
         Position = pos or UDim2.new(0.5, -105 + (n % 4) * 76, 0.3, math.floor(n / 4) * 50),
         BackgroundColor3 = C.ELEMENT, Text = name, TextColor3 = C.TEXT, TextScaled = true, Font = Enum.Font.GothamBold,
@@ -3846,6 +3843,8 @@ local function exitEdit()
     if not EDIT.mode then return end
     EDIT.mode = nil
     clearBoxes()
+    X.kfRoot.Active = false
+    wmRoot.Active = false
     catcher.Visible = false
     saveUI()
     notify("Позиции сохранены")
@@ -3869,8 +3868,10 @@ local function enterEdit(mode)
     if mode == "fab" then
         editBox(fab, true)
     elseif mode == "wm" then
+        wmRoot.Active = true
         editBox(wmRoot, true)
     elseif mode == "kf" then
+        X.kfRoot.Active = true
         editBox(X.kfRoot, true)
     else
         for _, b in pairs(bindButtons) do editBox(b, true) end
