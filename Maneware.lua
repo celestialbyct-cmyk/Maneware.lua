@@ -1,3 +1,6 @@
+-- Maneware MM2 v10 | Mobile (Delta)
+-- v10: DupeVote (запись голоса), Autofarm не проваливается в пол, GunModel, NameProtect+,
+-- KillFeed, JumpCircle
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local UIS = game:GetService("UserInputService")
@@ -98,52 +101,10 @@ local function tw(o, t, p)
     if ok then tween:Play() return tween end
 end
 local function corner(r, p) return new("UICorner", {CornerRadius = UDim.new(0, r or 8)}, p) end
-local function getGuiParent()
-    -- Delta / мобильные экзекуторы: пробуем все варианты родителя
-    local candidates = {}
-    pcall(function()
-        if gethui then
-            local h = gethui()
-            if h then table.insert(candidates, h) end
-        end
-    end)
-    pcall(function()
-        local cg = game:GetService("CoreGui")
-        if cg then table.insert(candidates, cg) end
-    end)
-    pcall(function()
-        local pg = LocalPlayer:FindFirstChild("PlayerGui") or LocalPlayer:WaitForChild("PlayerGui", 5)
-        if pg then table.insert(candidates, pg) end
-    end)
-    return candidates[1]
-end
 local function makeGui(name, order)
-    local parent = getGuiParent()
-    if not parent then
-        warn("[Maneware] GUI parent not found for " .. tostring(name))
-        parent = LocalPlayer:WaitForChild("PlayerGui", 10)
-    end
-    -- убираем старый GUI с тем же именем
-    pcall(function()
-        local old = parent:FindFirstChild(name)
-        if old then old:Destroy() end
-    end)
-    local sg = new("ScreenGui", {
-        Name = name,
-        ResetOnSpawn = false,
-        IgnoreGuiInset = true,
-        DisplayOrder = order or 100,
-        Enabled = true,
-        ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
-    }, parent)
-    -- protect_gui если есть (Synapse/некоторые форки)
-    pcall(function()
-        if syn and syn.protect_gui then syn.protect_gui(sg) end
-    end)
-    pcall(function()
-        if protect_gui then protect_gui(sg) end
-    end)
-    return sg
+    local ok, parent = pcall(function() return gethui and gethui() end)
+    return new("ScreenGui", {Name = name, ResetOnSpawn = false, IgnoreGuiInset = true, DisplayOrder = order},
+        (ok and parent) or LocalPlayer:WaitForChild("PlayerGui"))
 end
 local function createIcon(id, size, parent)
     return new("ImageLabel", {Size = size, BackgroundTransparency = 1, Image = id or "",
@@ -191,47 +152,12 @@ end
 
 local hubGui = makeGui("ManewareHub", 9999)
 local FULL = UDim2.new(0.9, 0, 0.85, 0)
--- Сразу ставим размер (на Delta tween из 0,0 иногда не отрабатывает — GUI «невидимый»)
-local main = new("Frame", {Size = FULL, Position = UDim2.new(0.5, 0, 0.5, 0),
+local main = new("Frame", {Size = UDim2.new(0, 0, 0, 0), Position = UDim2.new(0.5, 0, 0.5, 0),
     AnchorPoint = Vector2.new(0.5, 0.5), BackgroundColor3 = C.BG, BorderSizePixel = 0,
-    ClipsDescendants = true, Active = true, Visible = true}, hubGui)
+    ClipsDescendants = true, Active = true}, hubGui)
 corner(14, main)
 new("UIStroke", {Color = C.BORDER, Thickness = 2}, main)
--- лёгкий pop-in без обнуления размера
-pcall(function()
-    main.Size = UDim2.new(0.85, 0, 0.8, 0)
-    tw(main, 0.25, {Size = FULL})
-end)
--- страховка: через 0.5с принудительно показать
-task.delay(0.5, function()
-    if main and main.Parent then
-        main.Visible = true
-        if main.AbsoluteSize.X < 50 or main.AbsoluteSize.Y < 50 then
-            main.Size = FULL
-        end
-    end
-end)
-
--- UIScale под телефон (Delta Android)
-do
-    local sc = Instance.new("UIScale")
-    sc.Name = "MWScale"
-    sc.Parent = main
-    local function upd()
-        local cam = workspace.CurrentCamera
-        if not cam then return end
-        local vs = cam.ViewportSize
-        if vs.X < 10 then return end
-        -- на узких экранах чуть уменьшаем
-        local s = math.clamp(math.min(vs.X / 420, vs.Y / 750), 0.65, 1)
-        sc.Scale = s
-    end
-    upd()
-    pcall(function()
-        workspace.CurrentCamera:GetPropertyChangedSignal("ViewportSize"):Connect(upd)
-    end)
-end
-
+tw(main, 0.4, {Size = FULL})
 
 local topbar = new("Frame", {Size = UDim2.new(1, 0, 0, 55), BackgroundColor3 = C.TOPBAR, BorderSizePixel = 0, Active = true}, main)
 createIcon(ICONS.MENU, UDim2.new(0, 24, 0, 24), topbar).Position = UDim2.new(0, 15, 0.5, -12)
@@ -3693,10 +3619,10 @@ local function setMenu(show)
     menuVisible = show
     if show then
         main.Visible = true
-        main.Size = FULL
-        pcall(function() tw(main, 0.2, {Size = FULL}) end)
+        tw(main, 0.3, {Size = FULL})
     else
-        main.Visible = false
+        tw(main, 0.25, {Size = UDim2.new(0, 0, 0, 0)})
+        task.delay(0.26, function() if not menuVisible then main.Visible = false end end)
     end
 end
 
