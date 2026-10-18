@@ -1,6 +1,6 @@
--- Maneware MM2 v2 | Mobile (Delta)
--- Новое: AntiAFK, FPS Boost, Infinite Jump, ESP пистолета и монет, телепорты,
--- AntiFling, SheriffAim (visible check + предсказание)
+-- Maneware MM2 v10 | Mobile (Delta)
+-- v10: DupeVote (запись голоса), Autofarm не проваливается в пол, GunModel, NameProtect+,
+-- KillFeed, JumpCircle
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local UIS = game:GetService("UserInputService")
@@ -162,7 +162,7 @@ tw(main, 0.4, {Size = FULL})
 local topbar = new("Frame", {Size = UDim2.new(1, 0, 0, 55), BackgroundColor3 = C.TOPBAR, BorderSizePixel = 0, Active = true}, main)
 createIcon(ICONS.MENU, UDim2.new(0, 24, 0, 24), topbar).Position = UDim2.new(0, 15, 0.5, -12)
 new("TextLabel", {Size = UDim2.new(0.6, 0, 1, 0), Position = UDim2.new(0, 50, 0, 0), BackgroundTransparency = 1,
-    Text = "Maneware | MM2 v9", TextColor3 = C.TEXT, TextSize = 16, Font = Enum.Font.GothamBold,
+    Text = "Maneware | MM2 v10", TextColor3 = C.TEXT, TextSize = 16, Font = Enum.Font.GothamBold,
     TextXAlignment = Enum.TextXAlignment.Left}, topbar)
 local closeBtn = new("TextButton", {Size = UDim2.new(0, 40, 0, 40), Position = UDim2.new(1, -48, 0.5, -20),
     BackgroundColor3 = C.RED, Text = "✕", TextColor3 = C.TEXT, TextSize = 18, Font = Enum.Font.GothamBold,
@@ -1521,8 +1521,8 @@ end)
 --------------------------------------------------
 -- AUTOFARM МОНЕТ
 --------------------------------------------------
-local farm = {on = false, speed = 30, limit = 40, flingMurd = false, reset = false, walls = true,
-    safe = 0, count = 0, done = false, sessionCoins = 0, waitGame = true, startTime = 0}
+local farm = {on = false, height = 3, speed = 30, limit = 40, flingMurd = false, reset = false, walls = true,
+    safe = 0, count = 0, done = false, sessionCoins = 0, waitGame = true, startTime = 0, anchored = false}
 do -- блок autofarm (локальные переменные живут только тут)
 local coinSkip = setmetatable({}, {__mode = "k"})
 local lastContainer, cachedCC, lastCCScan, lastFarmWarn = nil, nil, 0, 0
@@ -1585,10 +1585,21 @@ local function readBag()
     return ok and n or nil
 end
 
+-- снимаем заморозку персонажа (во время полёта к монете он Anchored, чтобы не проваливаться в пол)
+farm.release = function()
+    if farm.anchored then
+        farm.anchored = false
+        local h = myHrp()
+        if h then h.Anchored = false end
+    end
+end
+
 -- летим к монете напрямую (сквозь препятствия) со скоростью из слайдера
 local function flyTo(part, coin)
     local h0 = myHrp()
     if not h0 then return false end
+    farm.anchored = true
+    h0.Anchored = true -- без этого с NoClip гравитация тянет вниз сквозь пол
     local spd = math.clamp(tonumber(farm.speed) or 30, 8, 80)
     local limit = (part.Position - h0.Position).Magnitude / spd + 4
     local t0 = os.clock()
@@ -1597,7 +1608,7 @@ local function flyTo(part, coin)
         if not h then return false end
         local dt = RunService.Heartbeat:Wait()
         if dt <= 0 or dt > 0.1 then dt = 1/60 end
-        local targetPos = part.Position + Vector3.new(0, 1.5, 0)
+        local targetPos = part.Position + Vector3.new(0, farm.height, 0)
         local diff = targetPos - h.Position
         local dist = diff.Magnitude
         if dist < 1.2 then
@@ -1619,6 +1630,7 @@ local function flyTo(part, coin)
 end
 
 local function farmLimitReached()
+    farm.release()
     farm.done = true
     if farm.flingMurd then
         local m = findByRole("Murderer", true)
@@ -1638,6 +1650,7 @@ task.spawn(function()
         task.wait(0.12)
         if farm.on and not farmBusy and not grabBusy and not flingBusy and not killAllBusy then
             farmBusy = true
+            local moved = false
             local ok, err = pcall(function()
                 -- waitGame: стоим, пока раунд не начался / после ресета ждём новую игру
                 if farm.waitGame and not isGameActive() then
@@ -1670,13 +1683,14 @@ task.spawn(function()
                 if farm.walls and not noclipEnabled then toggleNoclip(true) end
                 local coin, part, hadTouch = nearestCoin(cc, my)
                 if not coin then return end
+                moved = true
                 if flyTo(part, coin) then
                     local got = false
                     local t0 = os.clock()
                     while os.clock() - t0 < 0.7 do
                         local h = myHrp()
                         if not h then break end
-                        h.CFrame = CFrame.new(part.Position + Vector3.new(0, 1.2, 0)) * h.CFrame.Rotation
+                        h.CFrame = CFrame.new(part.Position + Vector3.new(0, farm.height, 0)) * h.CFrame.Rotation
                         h.AssemblyLinearVelocity = Vector3.zero
                         if firetouchinterest then
                             pcall(function()
@@ -1698,6 +1712,7 @@ task.spawn(function()
                 end
             end)
             if not ok then warn("[Maneware] autofarm: " .. tostring(err)) end
+            if farm.anchored and (not farm.on or not moved) then farm.release() end
             farmBusy = false
         end
     end
@@ -2674,6 +2689,364 @@ LocalPlayer.CharacterAdded:Connect(function(c)
     if cm.on then applyCustomModel() end
 end)
 
+--------------------------------------------------
+-- v10: NameProtect+, GunModel, KillFeed, JumpCircle
+--------------------------------------------------
+do
+local CoreGui = nil
+pcall(function() CoreGui = game:GetService("CoreGui") end)
+
+----------------------------------------------------------------
+-- NAMEPROTECT+: прячет ник в Tab-списке, Esc-меню, чате, GUI игры
+----------------------------------------------------------------
+local npOrig = setmetatable({}, {__mode = "k"})
+local npSet = setmetatable({}, {__mode = "k"})
+local function esc(s) return (tostring(s):gsub("%p", "%%%0")) end
+local function npFix(o)
+    if not (o:IsA("TextLabel") or o:IsA("TextButton")) then return end
+    local sg = o:FindFirstAncestorWhichIsA("ScreenGui")
+    if sg and sg.Name:sub(1, 8) == "Maneware" then return end
+    local t = o.Text
+    if t == "" or npSet[o] == t then return end
+    local n1, n2 = LocalPlayer.Name, LocalPlayer.DisplayName
+    if not (t:find(n1, 1, true) or t:find(n2, 1, true)) then return end
+    local r = (np.text ~= "" and np.text) or "Hidden"
+    local out = t:gsub(esc(n1), function() return r end)
+    out = out:gsub(esc(n2), function() return r end)
+    if out ~= t then
+        npOrig[o] = t
+        npSet[o] = out
+        o.Text = out
+    end
+end
+local function npRestore()
+    for o, orig in pairs(npOrig) do
+        pcall(function() if o.Parent and o.Text == npSet[o] then o.Text = orig end end)
+    end
+    npOrig = setmetatable({}, {__mode = "k"})
+    npSet = setmetatable({}, {__mode = "k"})
+end
+local function npScan()
+    for _, root in ipairs({CoreGui or LocalPlayer, LocalPlayer:FindFirstChild("PlayerGui") or LocalPlayer}) do
+        for _, o in ipairs(root:GetDescendants()) do pcall(npFix, o) end
+    end
+end
+local function npHum()
+    local h = myHum()
+    if not h then return end
+    if np.on then
+        if not h:GetAttribute("MWDN") then h:SetAttribute("MWDN", h.DisplayName) end
+        h.DisplayName = (np.text ~= "" and np.text) or "Hidden"
+    else
+        local o = h:GetAttribute("MWDN")
+        if o then h.DisplayName = o h:SetAttribute("MWDN", nil) end
+    end
+end
+X.npRefresh = function()
+    npRestore()
+    if np.on then pcall(npScan) end
+    pcall(npHum)
+end
+if CoreGui then
+    CoreGui.DescendantAdded:Connect(function(o)
+        if np.on then task.delay(0.05, function() pcall(npFix, o) end) end
+    end)
+end
+task.spawn(function()
+    while true do
+        task.wait(1)
+        if np.on then pcall(npScan) pcall(npHum) end
+    end
+end)
+LocalPlayer.CharacterAdded:Connect(function()
+    task.wait(1)
+    if np.on then pcall(npHum) end
+end)
+
+----------------------------------------------------------------
+-- GUNMODEL: 6 разных моделей (AWP x3, Deagle x3), ищутся, не создаются
+----------------------------------------------------------------
+local gm = {on = false, sel = 1, size = 1, rot = 0, busy = false, fail = 0, cur = nil}
+local GM_SLOTS = {
+    {key = "gm_awp1", label = "AWP", q = "awp gun"},
+    {key = "gm_awp2", label = "AWP #2", q = "awp sniper rifle"},
+    {key = "gm_awp3", label = "AWP #3", q = "awp asiimov"},
+    {key = "gm_deagle1", label = "Deagle", q = "deagle gun"},
+    {key = "gm_deagle2", label = "Deagle #2", q = "desert eagle"},
+    {key = "gm_deagle3", label = "Deagle #3", q = "deagle csgo"},
+}
+local gmHidden = {}
+local function gmClearAll()
+    gm.cur = nil
+    local conts = {}
+    if myChar() then table.insert(conts, myChar()) end
+    local bp = LocalPlayer:FindFirstChild("Backpack")
+    if bp then table.insert(conts, bp) end
+    for _, cont in ipairs(conts) do
+        for _, t in ipairs(cont:GetChildren()) do
+            local o = t:FindFirstChild("MWGunModel")
+            if o then o:Destroy() end
+        end
+    end
+    for inst, tr in pairs(gmHidden) do pcall(function() inst.Transparency = tr end) end
+    gmHidden = {}
+end
+local function gmApply(gun, key)
+    gm.busy = true
+    task.spawn(function()
+        local ok = pcall(function()
+            local slot = GM_SLOTS[gm.sel]
+            local id = resolveModelSlot(slot)
+            local tpl = id and fetchModel(id)
+            if not tpl then
+                gm.fail = os.clock()
+                notify("GunModel: " .. slot.label .. " не найден (введи ID вручную)")
+                return
+            end
+            local handle = gun:FindFirstChild("Handle") or gun:FindFirstChildWhichIsA("BasePart")
+            if not handle or not gun.Parent or not gm.on then return end
+            local m = tpl:Clone()
+            m.Name = "MWGunModel"
+            local kill = {}
+            for _, d in ipairs(m:GetDescendants()) do
+                if d:IsA("BaseScript") or d:IsA("Humanoid") then table.insert(kill, d) end
+            end
+            for _, d in ipairs(kill) do pcall(function() d:Destroy() end) end
+            pcall(function() m:ScaleTo(gm.size) end)
+            local parts = {}
+            for _, d in ipairs(m:GetDescendants()) do
+                if d:IsA("BasePart") then
+                    d.Anchored = false d.CanCollide = false d.CanTouch = false
+                    d.CanQuery = false d.Massless = true
+                    table.insert(parts, d)
+                end
+            end
+            local primary = m.PrimaryPart or parts[1]
+            if not primary then return end
+            m.Parent = gun
+            m:PivotTo(handle.CFrame * CFrame.Angles(0, math.rad(gm.rot), 0))
+            for _, pt in ipairs(parts) do
+                if pt ~= primary then
+                    local w = Instance.new("WeldConstraint")
+                    w.Part0, w.Part1 = primary, pt
+                    w.Parent = primary
+                end
+            end
+            local w0 = Instance.new("WeldConstraint")
+            w0.Part0, w0.Part1 = handle, primary
+            w0.Parent = primary
+            for _, d in ipairs(gun:GetDescendants()) do
+                if not d:IsDescendantOf(m) and (d:IsA("BasePart") or d:IsA("Decal") or d:IsA("Texture")) then
+                    gmHidden[d] = d.Transparency
+                    d.Transparency = 1
+                end
+            end
+            gm.cur = key
+            notify("GunModel: " .. slot.label .. " ✔")
+        end)
+        if not ok then gm.fail = os.clock() end
+        gm.busy = false
+    end)
+end
+task.spawn(function()
+    while true do
+        task.wait(0.5)
+        if gm.on and not gm.busy then
+            pcall(function()
+                local c = myChar()
+                local gun = c and c:FindFirstChild("Gun")
+                if not gun then return end
+                local key = gm.sel .. "|" .. gm.size .. "|" .. gm.rot
+                if gun:FindFirstChild("MWGunModel") and gm.cur == key then return end
+                if os.clock() - gm.fail < 6 then return end
+                gmClearAll()
+                gmApply(gun, key)
+            end)
+        end
+    end
+end)
+
+----------------------------------------------------------------
+-- KILLFEED
+----------------------------------------------------------------
+local kf = {on = false, hideInn = true, hideMur = true, hideShe = true}
+X.kf = kf
+local kfGui = makeGui("ManewareKF", 99994)
+local kfRoot = new("Frame", {Name = "KF", Size = UDim2.new(0, 270, 0, 190), Position = UDim2.new(0, 12, 0.3, 0),
+    BackgroundTransparency = 1, Active = true}, kfGui)
+X.kfRoot = kfRoot
+local kfList = new("Frame", {Size = UDim2.new(1, 0, 1, 0), BackgroundTransparency = 1}, kfRoot)
+new("UIListLayout", {Padding = UDim.new(0, 5), SortOrder = Enum.SortOrder.LayoutOrder,
+    VerticalAlignment = Enum.VerticalAlignment.Bottom}, kfList)
+local KFC = {Murderer = Color3.fromRGB(255, 70, 70), Sheriff = Color3.fromRGB(70, 150, 255),
+    Innocent = Color3.fromRGB(70, 220, 120)}
+local function hex(c)
+    return string.format("#%02X%02X%02X", math.floor(c.R * 255 + 0.5), math.floor(c.G * 255 + 0.5), math.floor(c.B * 255 + 0.5))
+end
+local function rt(s) return (tostring(s):gsub("&", "&amp;"):gsub("<", "&lt;"):gsub(">", "&gt;")) end
+local function nmOf(pl) if pl == LocalPlayer then return displayName() end return pl.DisplayName end
+local kfOrder, kfCards = 0, {}
+local function kfPush(kName, kRole, vName, vRole)
+    kfOrder += 1
+    local card = new("Frame", {Size = UDim2.new(1, 0, 0, 30), BackgroundColor3 = Color3.fromRGB(12, 12, 16),
+        BackgroundTransparency = 1, BorderSizePixel = 0, LayoutOrder = kfOrder}, kfList)
+    corner(8, card)
+    local st = new("UIStroke", {Color = KFC[vRole], Thickness = 1.5, Transparency = 1}, card)
+    local tl = new("TextLabel", {Size = UDim2.new(1, -14, 1, 0), Position = UDim2.new(0, 7, 0, 0),
+        BackgroundTransparency = 1, RichText = true, TextSize = 14, Font = Enum.Font.GothamBold,
+        TextXAlignment = Enum.TextXAlignment.Left, TextTruncate = Enum.TextTruncate.AtEnd,
+        TextColor3 = Color3.new(1, 1, 1), TextTransparency = 1,
+        Text = string.format('<font color="%s">%s</font>  ➜  <font color="%s">%s</font>',
+            hex(KFC[kRole]), rt(kName), hex(KFC[vRole]), rt(vName))}, card)
+    table.insert(kfCards, card)
+    while #kfCards > 6 do
+        local o = table.remove(kfCards, 1)
+        if o.Parent then o:Destroy() end
+    end
+    local tin = TweenInfo.new(0.15)
+    TweenService:Create(card, tin, {BackgroundTransparency = 0.15}):Play()
+    TweenService:Create(st, tin, {Transparency = 0.2}):Play()
+    TweenService:Create(tl, tin, {TextTransparency = 0}):Play()
+    task.delay(1.6, function() -- всего живёт 2 секунды
+        if not card.Parent then return end
+        local to = TweenInfo.new(0.4)
+        TweenService:Create(card, to, {BackgroundTransparency = 1}):Play()
+        TweenService:Create(st, to, {Transparency = 1}):Play()
+        TweenService:Create(tl, to, {TextTransparency = 1}):Play()
+        task.wait(0.45)
+        card:Destroy()
+    end)
+end
+local kfRole = {}
+task.spawn(function()
+    while true do
+        task.wait(0.2)
+        for _, pl in ipairs(Players:GetPlayers()) do
+            local h = pl.Character and pl.Character:FindFirstChildOfClass("Humanoid")
+            if h and h.Health > 0 then kfRole[pl] = getRole(pl) end
+        end
+    end
+end)
+Players.PlayerRemoving:Connect(function(pl) kfRole[pl] = nil end)
+local function kfHook(pl)
+    local function onChar(ch)
+        local hum = ch:WaitForChild("Humanoid", 5)
+        if not hum then return end
+        hum.Died:Connect(function()
+            if not kf.on then return end
+            local vr = kfRole[pl]
+            if not vr then return end
+            local want = (vr == "Murderer") and "Sheriff" or "Murderer"
+            local killer
+            for p, r in pairs(kfRole) do
+                if p ~= pl and r == want and p.Parent then killer = p break end
+            end
+            if not killer then return end
+            if vr == "Innocent" and not kf.hideInn then return end
+            if vr == "Murderer" and not kf.hideMur then return end
+            if vr == "Sheriff" and not kf.hideShe then return end
+            kfPush(nmOf(killer), want, nmOf(pl), vr)
+        end)
+    end
+    if pl.Character then task.spawn(onChar, pl.Character) end
+    pl.CharacterAdded:Connect(onChar)
+end
+for _, pl in ipairs(Players:GetPlayers()) do kfHook(pl) end
+Players.PlayerAdded:Connect(kfHook)
+
+----------------------------------------------------------------
+-- JUMPCIRCLE: незамкнутое кольцо на месте прыжка, живёт 4 секунды
+----------------------------------------------------------------
+local jc = {on = false, size = 3}
+local jcRings = {}
+local function groundPos()
+    local c, hrp = myChar(), myHrp()
+    if not c or not hrp then return nil end
+    local rp = RaycastParams.new()
+    rp.FilterType = Enum.RaycastFilterType.Exclude
+    rp.FilterDescendantsInstances = {c}
+    local r = workspace:Raycast(hrp.Position, Vector3.new(0, -8, 0), rp)
+    return r and (r.Position + Vector3.new(0, 0.08, 0)) or (hrp.Position - Vector3.new(0, 2.9, 0))
+end
+local function spawnRing(pos)
+    if not pos then return end
+    while #jcRings >= 6 do
+        local o = table.remove(jcRings, 1)
+        if o.Parent then o:Destroy() end
+    end
+    local folder = new("Folder", {Name = "MWJump"}, workspace)
+    table.insert(jcRings, folder)
+    local N, arc = 28, math.rad(260)
+    local seg = {}
+    for i = 1, N do
+        seg[i] = new("Part", {Anchored = true, CanCollide = false, CanTouch = false, CanQuery = false,
+            CastShadow = false, Material = Enum.Material.Neon, Color = C.ACCENT,
+            Size = Vector3.new(0.25, 0.08, 0.5)}, folder)
+    end
+    local t0, start = os.clock(), math.random() * math.pi * 2
+    local conn
+    conn = RunService.Heartbeat:Connect(function()
+        local a = (os.clock() - t0) / 4
+        if a >= 1 or not folder.Parent then
+            conn:Disconnect()
+            folder:Destroy()
+            return
+        end
+        local radius = jc.size * (0.6 + 0.4 * math.min(a * 4, 1))
+        local rot = start + a * math.pi
+        local segLen = (arc * radius / N) * 1.15
+        local tr = 0.15 + 0.85 * a * a
+        for i, p in ipairs(seg) do
+            local ang = rot + (i - 1) / (N - 1) * arc
+            p.Size = Vector3.new(0.25, 0.08, segLen)
+            p.CFrame = CFrame.new(pos + Vector3.new(math.cos(ang) * radius, 0, math.sin(ang) * radius))
+                * CFrame.Angles(0, -ang, 0)
+            p.Transparency = tr
+        end
+    end)
+end
+local function jcHook(ch)
+    local hum = ch:WaitForChild("Humanoid", 5)
+    if not hum then return end
+    hum.StateChanged:Connect(function(_, st)
+        if st == Enum.HumanoidStateType.Jumping and jc.on then pcall(function() spawnRing(groundPos()) end) end
+    end)
+end
+if LocalPlayer.Character then task.spawn(jcHook, LocalPlayer.Character) end
+LocalPlayer.CharacterAdded:Connect(jcHook)
+
+----------------------------------------------------------------
+-- UI новых вкладок (вызывается из buildUI)
+----------------------------------------------------------------
+X.buildNew = function()
+    local tg = addTab("GunModel", ICONS.GUN)
+    tg.Section("🔫 Модель пистолета (ищется в Creator Store)")
+    local labs = {}
+    for i, s in ipairs(GM_SLOTS) do labs[i] = s.label end
+    tg.ToggleDrop("GunModel", false, function(v)
+        gm.on = v
+        if not v then pcall(gmClearAll) end
+    end, ICONS.GUN, labs, 1, function(i) gm.sel = i gm.fail = 0 end)
+    tg.Slider("GunModel: Size", 0.2, 3, 1, "x", function(v) gm.size = v end, 0.1)
+    tg.Slider("GunModel: Rotate", 0, 360, 0, "°", function(v) gm.rot = v end, 90)
+    local box = tg.TextBox("ID модели вручную (если поиск не нашёл)")
+    tg.Button("✔ Применить ID к выбранной модели", function()
+        local id = tonumber(box.Text)
+        if not id then notify("Введи числовой ID") return end
+        if not fetchModel(id) then notify("Модель не загрузилась") return end
+        assetCache["model:" .. GM_SLOTS[gm.sel].key] = id
+        saveAssets()
+        gm.fail = 0
+        gm.cur = nil
+        notify("ID сохранён: " .. id)
+    end)
+    local tj = addTab("JumpCircle", ICONS.FLY)
+    tj.Section("⭕ JumpCircle")
+    tj.Toggle("JumpCircle", false, function(v) jc.on = v end, ICONS.FLY)
+    tj.Slider("JumpCircle: Size", 1, 8, 3, " st", function(v) jc.size = v end, 0.5)
+end
+end -- v10 блок
+
 local function buildUI()
 --------------------------------------------------
 -- ВКЛАДКИ
@@ -2761,7 +3134,7 @@ t5.Toggle("Anti-AFK", true, function(v) antiAfk = v end, ICONS.UTIL)
 t5.Toggle("Anti-Fling", false, function(v) antiFling = v end, ICONS.SHIELD)
 t5.Toggle("FPS Boost", false, fpsBoost, ICONS.SPEED)
 t5.Section("👁 NameProtect")
-t5.Toggle("NameProtect", false, function(v) np.on = v end, ICONS.EYE)
+t5.Toggle("NameProtect", false, function(v) np.on = v X.npRefresh() end, ICONS.EYE)
 local npBox = t5.TextBox("Текст вместо ника (можно русский)")
 npBox.Text = np.text
 t5.Button("✔ Применить текст NameProtect", function()
@@ -2769,6 +3142,7 @@ t5.Button("✔ Применить текст NameProtect", function()
     if t == "" then notify("Введи текст") return end
     np.text = t
     notify("NameProtect: " .. t)
+    X.npRefresh()
     if wm.on then pcall(wmRebuild) end
 end)
 
@@ -2797,10 +3171,12 @@ t7.Toggle("Autofarm", false, function(v)
         farm.done = false
     else
         farm.startTime = 0
+        if farm.release then farm.release() end
         toggleNoclip(noclipUser or flyEnabled)
     end
 end, ICONS.COIN)
 t7.Slider("Скорость фарма", 16, 50, 30, " st/s", function(v) farm.speed = v end)
+t7.Slider("Высота над монетой (не проваливаться)", 0, 6, 3, " st", function(v) farm.height = v end)
 t7.Slider("Лимит монет (мешок)", 10, 60, 40, "", function(v) farm.limit = v end)
 t7.Toggle("Проверка на игру (ждать раунд)", true, function(v) farm.waitGame = v end, ICONS.UTIL)
 t7.Toggle("Fling Murderer после лимита", false, function(v) farm.flingMurd = v end, ICONS.FLING)
@@ -2856,44 +3232,119 @@ local MM2_MAPS = {
     "Nook's Cranny", "Beach House", "Ski Lodge", "Casino", "Library", "Christmas House",
     "Ice Castle", "Village", "Colosseum", "Zoo", "Train Station", "Workshop",
 }
-local dupe = {map = 1, amount = 5, busy = false}
+local dupe = {map = 1, amount = 5, busy = false, rec = false, cap = nil, hooked = false}
+pcall(function()
+    if hookmetamethod and getnamecallmethod then
+        local old
+        local function hk(self, ...)
+            if dupe.rec then
+                local m = getnamecallmethod()
+                if (m == "FireServer" or m == "InvokeServer") and typeof(self) == "Instance" then
+                    local n = self.Name:lower()
+                    if n:find("vote") or n:find("map") then
+                        dupe.cap = {r = self, m = m, a = table.pack(...)}
+                        task.defer(notify, "DupeVote: записан " .. self.Name)
+                    end
+                end
+            end
+            return old(self, ...)
+        end
+        old = hookmetamethod(game, "__namecall", newcclosure and newcclosure(hk) or hk)
+        dupe.hooked = true
+    end
+end)
+
+local function mapArgs(args)
+    local out = table.pack(table.unpack(args, 1, args.n))
+    local mapName = MM2_MAPS[dupe.map]
+    for i = 1, out.n do
+        if type(out[i]) == "string" then
+            for _, n in ipairs(MM2_MAPS) do
+                if out[i] == n then out[i] = mapName break end
+            end
+        end
+    end
+    return out
+end
+local function btnMatches(b, name)
+    local l = name:lower()
+    if b.Name:lower() == l then return true end
+    if b:IsA("TextButton") and b.Text:lower() == l then return true end
+    for _, d in ipairs(b:GetDescendants()) do
+        if d:IsA("TextLabel") and d.Text:lower() == l then return true end
+    end
+    return false
+end
+local function clickBtn(b)
+    local done = false
+    for _, sig in ipairs({"MouseButton1Click", "Activated", "MouseButton1Down", "MouseButton1Up"}) do
+        if getconnections then
+            pcall(function()
+                for _, cn in ipairs(getconnections(b[sig])) do cn:Fire() done = true end
+            end)
+        elseif firesignal then
+            pcall(function() firesignal(b[sig]) done = true end)
+        end
+    end
+    return done
+end
+
 local function doDupeVote()
-    if dupe.busy then notify("DupeVote уже идёт") return end
+    if dupe.busy then notify("DupeVote: уже идёт") return end
     dupe.busy = true
     task.spawn(function()
         local mapName = MM2_MAPS[dupe.map] or MM2_MAPS[1]
         local amt = math.clamp(math.floor(tonumber(dupe.amount) or 5), 1, 40)
+        local sent = 0
         notify("DupeVote: " .. mapName .. " x" .. amt)
-        local remotes = {}
-        pcall(function()
-            for _, d in ipairs(game:GetDescendants()) do
-                if (d:IsA("RemoteEvent") or d:IsA("RemoteFunction")) then
-                    local n = d.Name:lower()
-                    if n:find("vote") or n:find("map") or n:find("cast") then
-                        table.insert(remotes, d)
+        -- 1) повтор записанного голоса
+        local cap = dupe.cap
+        if cap and cap.r.Parent then
+            for _ = 1, amt do
+                local a = mapArgs(cap.a)
+                if cap.m == "FireServer" then
+                    if pcall(function() cap.r:FireServer(table.unpack(a, 1, a.n)) end) then sent += 1 end
+                else
+                    task.spawn(function() pcall(function() cap.r:InvokeServer(table.unpack(a, 1, a.n)) end) end)
+                    sent += 1
+                end
+                task.wait(0.05)
+            end
+        end
+        -- 2) кнопка карты в GUI
+        if sent == 0 then
+            local pg = LocalPlayer:FindFirstChild("PlayerGui")
+            if pg then
+                for _, d in ipairs(pg:GetDescendants()) do
+                    if d:IsA("GuiButton") and btnMatches(d, mapName) then
+                        for _ = 1, amt do
+                            if clickBtn(d) then sent += 1 end
+                            task.wait(0.05)
+                        end
+                        break
                     end
                 end
             end
-        end)
-        local sent = 0
-        for i = 1, amt do
-            for _, r in ipairs(remotes) do
-                pcall(function()
-                    if r:IsA("RemoteEvent") then
-                        r:FireServer(mapName)
-                        r:FireServer(dupe.map)
-                        r:FireServer(mapName, true)
-                        sent += 1
-                    elseif r:IsA("RemoteFunction") then
-                        r:InvokeServer(mapName)
-                        r:InvokeServer(dupe.map)
-                        sent += 1
-                    end
-                end)
-            end
-            task.wait(0.05)
         end
-        notify(sent > 0 and ("DupeVote: отправлено ~" .. sent) or "DupeVote: ремоуты голосования не найдены (жди экран выбора карты)")
+        -- 3) ремоуты с "vote" в имени
+        if sent == 0 then
+            pcall(function()
+                for _, d in ipairs(game:GetService("ReplicatedStorage"):GetDescendants()) do
+                    if (d:IsA("RemoteEvent") or d:IsA("RemoteFunction")) and d.Name:lower():find("vote") then
+                        for _ = 1, amt do
+                            if d:IsA("RemoteEvent") then
+                                d:FireServer(mapName) d:FireServer(dupe.map)
+                            else
+                                task.spawn(function() pcall(function() d:InvokeServer(mapName) end) end)
+                            end
+                            sent += 1
+                            task.wait(0.05)
+                        end
+                    end
+                end
+            end)
+        end
+        notify(sent > 0 and ("DupeVote: отправлено " .. sent) or "DupeVote: не сработало. Включи запись и проголосуй вручную")
         dupe.busy = false
     end)
 end
@@ -2907,6 +3358,11 @@ tDV.ToggleDrop("Карта", true, function() end, ICONS.TP, mapLabels, 1, funct
     notify("Карта: " .. (MM2_MAPS[i] or "?"))
 end)
 tDV.Slider("Количество голосов", 1, 40, 5, "", function(v) dupe.amount = v end)
+tDV.Toggle("DupeVote: запись (проголосуй вручную)", false, function(v)
+    if v and not dupe.hooked then notify("DupeVote: нет hookmetamethod") return end
+    dupe.rec = v
+    if v then dupe.cap = nil notify("DupeVote: проголосуй за любую карту") end
+end, ICONS.UTIL)
 tDV.Button("▶ DupeVote сейчас", doDupeVote)
 
 -- CustomModel
@@ -3062,6 +3518,9 @@ end, ICONS.EYE, {
     if grad.on then X.applyTheme() end
 end)
 
+-- v10: GunModel и JumpCircle
+X.buildNew()
+
 -- Configs
 local t9 = addTab("Configs", ICONS.UTIL)
 t9.Section("💾 Конфиги (сохранение настроек)")
@@ -3176,7 +3635,7 @@ fabIcon.Position = UDim2.new(0.5, -11, 0.5, -11)
 fabIcon.ImageColor3 = Color3.new(1, 1, 1)
 fabIcon.ZIndex = 11
 
--- Режим редактирования: двигать кнопку/watermark/binds можно ТОЛЬКО в нём
+-- Режим редактирования: двигать кнопку/watermark/binds/killfeed можно ТОЛЬКО в нём
 local EDIT = {mode = nil, reopen = false}
 
 local function makeDraggable(obj, canDrag)
@@ -3211,12 +3670,13 @@ UIS.InputBegan:Connect(function(i, gpe)
 end)
 
 --------------------------------------------------
--- ИНТЕРФЕЙС: watermark, binds, режим редактирования
+-- ИНТЕРФЕЙС: watermark, binds, killfeed, режим редактирования
 --------------------------------------------------
 local uiData = readJson("ui.json") or {}
 local function posToTbl(pp) return {pp.X.Scale, pp.X.Offset, pp.Y.Scale, pp.Y.Offset} end
 local function tblToPos(t) return UDim2.new(t[1] or 0, t[2] or 0, t[3] or 0, t[4] or 0) end
 if uiData.fab then pcall(function() fab.Position = tblToPos(uiData.fab) end) end
+if uiData.kf then pcall(function() X.kfRoot.Position = tblToPos(uiData.kf) end) end
 
 -- Watermark
 local wmGui = makeGui("ManewareWM", 99996)
@@ -3249,21 +3709,22 @@ task.spawn(function()
     end
 end)
 makeDraggable(wmRoot, function() return EDIT.mode == "wm" end)
+makeDraggable(X.kfRoot, function() return EDIT.mode == "kf" end)
 
 -- Binds: кнопки на экране, включают/выключают функции
 local bindGui = makeGui("ManewareBinds", 99997)
 local bindButtons = {}
 
 local function saveUI()
-    local d = {fab = posToTbl(fab.Position), wm = posToTbl(wmRoot.Position), binds = {}}
+    local d = {fab = posToTbl(fab.Position), wm = posToTbl(wmRoot.Position), kf = posToTbl(X.kfRoot.Position), binds = {}}
     for name, b in pairs(bindButtons) do d.binds[name] = posToTbl(b.Position) end
     uiData = d
     writeJson("ui.json", d)
 end
 
--- для конфигов: сохраняем/загружаем позиции FAB, watermark, биндов
+-- для конфигов: сохраняем/загружаем позиции FAB, watermark, killfeed, биндов
 X.collectUI = function()
-    local d = {fab = posToTbl(fab.Position), wm = posToTbl(wmRoot.Position), binds = {}}
+    local d = {fab = posToTbl(fab.Position), wm = posToTbl(wmRoot.Position), kf = posToTbl(X.kfRoot.Position), binds = {}}
     for name, b in pairs(bindButtons) do d.binds[name] = posToTbl(b.Position) end
     return d
 end
@@ -3271,6 +3732,7 @@ X.applyUI = function(d)
     if type(d) ~= "table" then return end
     if d.fab then pcall(function() fab.Position = tblToPos(d.fab) end) end
     if d.wm then pcall(function() wmRoot.Position = tblToPos(d.wm) end) end
+    if d.kf then pcall(function() X.kfRoot.Position = tblToPos(d.kf) end) end
     if type(d.binds) == "table" then
         for name, t in pairs(d.binds) do
             if bindButtons[name] then
@@ -3376,6 +3838,7 @@ end
 local function clearBoxes()
     editBox(fab, false)
     editBox(wmRoot, false)
+    editBox(X.kfRoot, false)
     for _, b in pairs(bindButtons) do editBox(b, false) end
 end
 
@@ -3407,6 +3870,8 @@ local function enterEdit(mode)
         editBox(fab, true)
     elseif mode == "wm" then
         editBox(wmRoot, true)
+    elseif mode == "kf" then
+        editBox(X.kfRoot, true)
     else
         for _, b in pairs(bindButtons) do editBox(b, true) end
     end
@@ -3425,12 +3890,20 @@ catcher.InputEnded:Connect(function(i)
     end
 end)
 
--- Группа слева: Binds (вкладка) + кнопки редактирования
+-- Группа слева: Binds (вкладка) + кнопки редактирования + KillFeed
 addSideLabel("ИНТЕРФЕЙС", 999)
 local tb = addTab("Binds", ICONS.UTIL, 1000)
 addSideButton("✎ Кнопка меню", ICONS.MENU, 1001, function() enterEdit("fab") end)
 addSideButton("✎ Watermark", ICONS.EYE, 1002, function() enterEdit("wm") end)
 addSideButton("✎ Binds", ICONS.UTIL, 1003, function() enterEdit("binds") end)
+
+local tkf = addTab("KillFeed", ICONS.TARGET, 1004)
+tkf.Section("☠ KillFeed")
+tkf.Toggle("KillFeed", false, function(v) X.kf.on = v end, ICONS.TARGET)
+tkf.Button("✎ Двигать KillFeed", function() enterEdit("kf") end)
+tkf.Toggle("Hide Innocent (убит невиновный)", true, function(v) X.kf.hideInn = v end, ICONS.EYE)
+tkf.Toggle("Hide Murder (убит убийца)", true, function(v) X.kf.hideMur = v end, ICONS.EYE)
+tkf.Toggle("Hide Sheriff (убит шериф)", true, function(v) X.kf.hideShe = v end, ICONS.EYE)
 
 tb.Section("🎛 Binds: кнопка на экране для функции или действия")
 local bindHolder = tb.Holder()
@@ -3439,7 +3912,7 @@ for name, e in pairs(REG) do
     if e.kind == "toggle" then bindNames[#bindNames + 1] = name end
 end
 for name in pairs(ACT) do
-    if not (name:find("🔄") or name:find("💾") or name:find("✔")) then bindNames[#bindNames + 1] = name end
+    if not (name:find("🔄") or name:find("💾") or name:find("✔") or name:find("✎")) then bindNames[#bindNames + 1] = name end
 end
 table.sort(bindNames)
 for i, name in ipairs(bindNames) do
@@ -3651,5 +4124,5 @@ if not okUI then
     notify("Ошибка UI: " .. tostring(errUI))
 end
 
-print("[Maneware] v9 загружен")
+print("[Maneware] v10 загружен")
  
