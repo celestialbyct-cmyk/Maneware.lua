@@ -1,6 +1,3 @@
--- Maneware MM2 v10 | Mobile (Delta)
--- v10: DupeVote (запись голоса), Autofarm не проваливается в пол, GunModel, NameProtect+,
--- KillFeed, JumpCircle
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local UIS = game:GetService("UserInputService")
@@ -4202,7 +4199,3 @@ if not okUI then
 end
 
 print("[Maneware] v10 загружен")
-pcall(function()
-    print("[Maneware] hub parent=", hubGui and hubGui.Parent and hubGui.Parent.Name)
-    print("[Maneware] main size=", main and main.AbsoluteSize)
-end)
