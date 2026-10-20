@@ -4625,15 +4625,3 @@ if not okUI then
 end
 
 print("[Maneware] v11.2 загружен")
--- Принудительно показать меню
-pcall(function()
-    if hubGui then hubGui.Enabled = true end
-    if main then
-        main.Visible = true
-        main.Size = UDim2.new(0.9, 0, 0.85, 0)
-        main.Position = UDim2.new(0.5, 0, 0.5, 0)
-        main.AnchorPoint = Vector2.new(0.5, 0.5)
-    end
-    print("[Maneware] hub parent=", hubGui and hubGui.Parent and tostring(hubGui.Parent))
-    print("[Maneware] main AbsSize=", main and main.AbsoluteSize)
-end)
