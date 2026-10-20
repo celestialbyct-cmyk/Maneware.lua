@@ -1,6 +1,5 @@
--- Maneware MM2 v10 | Mobile (Delta)
--- v10: DupeVote (запись голоса), Autofarm не проваливается в пол, GunModel, NameProtect+,
--- KillFeed, JumpCircle
+-- Maneware MM2 v11 | Mobile (Delta)
+-- v11: ChatManeware, UserNash, KnifeModel, Autofarm Candy (Halloween), Aim studs, custom stars
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local UIS = game:GetService("UserInputService")
@@ -85,6 +84,10 @@ local function resolveIcon(id, name)
 end
 for k, v in pairs(ICONS) do ICONS[k] = resolveIcon(v, k) end
 
+-- Логотип Maneware (замени rbxassetid на свой с фото)
+local LOGO_ID = "rbxassetid://10734898355"
+
+
 --------------------------------------------------
 -- УТИЛИТЫ
 --------------------------------------------------
@@ -101,10 +104,52 @@ local function tw(o, t, p)
     if ok then tween:Play() return tween end
 end
 local function corner(r, p) return new("UICorner", {CornerRadius = UDim.new(0, r or 8)}, p) end
+local function getGuiParent()
+    -- Delta / мобильные экзекуторы: пробуем все варианты родителя
+    local candidates = {}
+    pcall(function()
+        if gethui then
+            local h = gethui()
+            if h then table.insert(candidates, h) end
+        end
+    end)
+    pcall(function()
+        local cg = game:GetService("CoreGui")
+        if cg then table.insert(candidates, cg) end
+    end)
+    pcall(function()
+        local pg = LocalPlayer:FindFirstChild("PlayerGui") or LocalPlayer:WaitForChild("PlayerGui", 5)
+        if pg then table.insert(candidates, pg) end
+    end)
+    return candidates[1]
+end
 local function makeGui(name, order)
-    local ok, parent = pcall(function() return gethui and gethui() end)
-    return new("ScreenGui", {Name = name, ResetOnSpawn = false, IgnoreGuiInset = true, DisplayOrder = order},
-        (ok and parent) or LocalPlayer:WaitForChild("PlayerGui"))
+    local parent = getGuiParent()
+    if not parent then
+        warn("[Maneware] GUI parent not found for " .. tostring(name))
+        parent = LocalPlayer:WaitForChild("PlayerGui", 10)
+    end
+    -- убираем старый GUI с тем же именем
+    pcall(function()
+        local old = parent:FindFirstChild(name)
+        if old then old:Destroy() end
+    end)
+    local sg = new("ScreenGui", {
+        Name = name,
+        ResetOnSpawn = false,
+        IgnoreGuiInset = true,
+        DisplayOrder = order or 100,
+        Enabled = true,
+        ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
+    }, parent)
+    -- protect_gui если есть (Synapse/некоторые форки)
+    pcall(function()
+        if syn and syn.protect_gui then syn.protect_gui(sg) end
+    end)
+    pcall(function()
+        if protect_gui then protect_gui(sg) end
+    end)
+    return sg
 end
 local function createIcon(id, size, parent)
     return new("ImageLabel", {Size = size, BackgroundTransparency = 1, Image = id or "",
@@ -152,17 +197,56 @@ end
 
 local hubGui = makeGui("ManewareHub", 9999)
 local FULL = UDim2.new(0.9, 0, 0.85, 0)
-local main = new("Frame", {Size = UDim2.new(0, 0, 0, 0), Position = UDim2.new(0.5, 0, 0.5, 0),
+-- Сразу ставим размер (на Delta tween из 0,0 иногда не отрабатывает — GUI «невидимый»)
+local main = new("Frame", {Size = FULL, Position = UDim2.new(0.5, 0, 0.5, 0),
     AnchorPoint = Vector2.new(0.5, 0.5), BackgroundColor3 = C.BG, BorderSizePixel = 0,
-    ClipsDescendants = true, Active = true}, hubGui)
+    ClipsDescendants = true, Active = true, Visible = true}, hubGui)
 corner(14, main)
 new("UIStroke", {Color = C.BORDER, Thickness = 2}, main)
-tw(main, 0.4, {Size = FULL})
+-- лёгкий pop-in без обнуления размера
+pcall(function()
+    main.Size = UDim2.new(0.85, 0, 0.8, 0)
+    tw(main, 0.25, {Size = FULL})
+end)
+-- страховка: через 0.5с принудительно показать
+task.delay(0.5, function()
+    if main and main.Parent then
+        main.Visible = true
+        if main.AbsoluteSize.X < 50 or main.AbsoluteSize.Y < 50 then
+            main.Size = FULL
+        end
+    end
+end)
+
+-- UIScale под телефон (Delta Android)
+do
+    local sc = Instance.new("UIScale")
+    sc.Name = "MWScale"
+    sc.Parent = main
+    local function upd()
+        local cam = workspace.CurrentCamera
+        if not cam then return end
+        local vs = cam.ViewportSize
+        if vs.X < 10 then return end
+        -- на узких экранах чуть уменьшаем
+        local s = math.clamp(math.min(vs.X / 420, vs.Y / 750), 0.65, 1)
+        sc.Scale = s
+    end
+    upd()
+    pcall(function()
+        workspace.CurrentCamera:GetPropertyChangedSignal("ViewportSize"):Connect(upd)
+    end)
+end
+
 
 local topbar = new("Frame", {Size = UDim2.new(1, 0, 0, 55), BackgroundColor3 = C.TOPBAR, BorderSizePixel = 0, Active = true}, main)
-createIcon(ICONS.MENU, UDim2.new(0, 24, 0, 24), topbar).Position = UDim2.new(0, 15, 0.5, -12)
-new("TextLabel", {Size = UDim2.new(0.6, 0, 1, 0), Position = UDim2.new(0, 50, 0, 0), BackgroundTransparency = 1,
-    Text = "Maneware | MM2 v10", TextColor3 = C.TEXT, TextSize = 16, Font = Enum.Font.GothamBold,
+local logoImg = new("ImageLabel", {Size = UDim2.new(0, 32, 0, 32), Position = UDim2.new(0, 12, 0.5, -16),
+    BackgroundColor3 = Color3.fromRGB(40, 30, 70), BackgroundTransparency = 0.3, Image = LOGO_ID,
+    ScaleType = Enum.ScaleType.Fit, BorderSizePixel = 0}, topbar)
+corner(8, logoImg)
+new("UIStroke", {Color = C.ACCENT, Thickness = 1}, logoImg)
+new("TextLabel", {Size = UDim2.new(0.6, 0, 1, 0), Position = UDim2.new(0, 52, 0, 0), BackgroundTransparency = 1,
+    Text = "Maneware | MM2 v11", TextColor3 = C.TEXT, TextSize = 16, Font = Enum.Font.GothamBold,
     TextXAlignment = Enum.TextXAlignment.Left}, topbar)
 local closeBtn = new("TextButton", {Size = UDim2.new(0, 40, 0, 40), Position = UDim2.new(1, -48, 0.5, -20),
     BackgroundColor3 = C.RED, Text = "✕", TextColor3 = C.TEXT, TextSize = 18, Font = Enum.Font.GothamBold,
@@ -648,8 +732,8 @@ RunService.RenderStepped:Connect(function(dt)
     local cf = Camera.CFrame
     local rel = cf:VectorToObjectSpace(hum.MoveDirection)
     local dir = cf.LookVector * -rel.Z + cf.RightVector * rel.X
-    if UIS:IsKeyDown(Enum.KeyCode.Space) or flyUp then dir = dir + Vector3.yAxis end
-    if UIS:IsKeyDown(Enum.KeyCode.LeftShift) or flyDown then dir = dir - Vector3.yAxis end
+    if UIS:IsKeyDown(Enum.KeyCode.Space) or flyUp then dir += Vector3.yAxis end
+    if UIS:IsKeyDown(Enum.KeyCode.LeftShift) or flyDown then dir -= Vector3.yAxis end
     if dir.Magnitude > 0 then
         bodyVel.Velocity = bodyVel.Velocity:Lerp(dir.Unit * flySpeed, math.min(1, dt * 12))
     else
@@ -764,7 +848,7 @@ local function applyTarget()
                 end
             end
             bb.Enabled = true
-            angle = angle + dt * 70 * tgt.speed
+            angle += dt * 70 * tgt.speed
             spin.Rotation = angle % 360
         else
             bb.Enabled = false
@@ -1025,7 +1109,7 @@ end
 --------------------------------------------------
 -- SHERIFF AIM
 --------------------------------------------------
-local aim = {on = false, visible = true, predict = true, strength = 100, range = 250, cd = 1.0, last = 0, hacker = false}
+local aim = {on = false, visible = true, predict = true, strength = 100, range = 250, cd = 1.0, last = 0, hacker = false, studs = 3}
 local BULLET_SPEED = 1500 -- пуля MM2 мгновенная (hitscan): упреждаем только на задержку сети
 local aimBusy = false
 
@@ -1100,7 +1184,7 @@ local function getRtt()
     return ok2 and pp * 2 or 0.1
 end
 
-local function predictAt(part, speed, strength)
+local function predictAt(part, speed, strength, studsOverride)
     -- part = точка прицеливания (Head/HRP), скорость берём с HRP персонажа
     local pos = part.Position
     local my = myHrp()
@@ -1109,25 +1193,34 @@ local function predictAt(part, speed, strength)
     local d = vTrack[hrp]
     local vel = d and d.vel or hrp.AssemblyLinearVelocity
     local hum = char and char:FindFirstChildOfClass("Humanoid")
-    if hum and hum.MoveDirection.Magnitude < 0.05 then vel = vel * 0.2 end -- стоит: упреждение почти не нужно
-    if vel.Magnitude > 45 then vel = vel.Unit * 45 end -- отсекаем рывки/телепорты
-    vel = Vector3.new(vel.X, vel.Y * 0.4, vel.Z)
+    if hum and hum.MoveDirection.Magnitude < 0.05 then vel = vel * 0.15 end
+    if vel.Magnitude > 50 then vel = vel.Unit * 50 end
+    vel = Vector3.new(vel.X, vel.Y * 0.35, vel.Z)
+    -- Упреждение в стадах: сколько «вперёд» по направлению движения цели
+    local studs = tonumber(studsOverride)
+    if studs and studs > 0 and vel.Magnitude > 0.5 then
+        return pos + vel.Unit * studs
+    end
     local rtt = getRtt()
     local origin = my and my.Position or Camera.CFrame.Position
     local predicted = pos
-    for _ = 1, 3 do -- время зависит от точки упреждения, уточняем итерациями
-        local t = (predicted - origin).Magnitude / speed + rtt
+    for _ = 1, 4 do
+        local t = (predicted - origin).Magnitude / math.max(speed, 1) + rtt
         predicted = pos + vel * t * strength
     end
     return predicted
 end
 
 local function predictPos(hrp)
-    -- Целимся в видимую часть хитбокса (или любую при Hacker)
     local char = hrp.Parent
     local targetPart = bestHitPart(char) or hrp
     if not aim.predict then return targetPart.Position end
-    return predictAt(targetPart, BULLET_SPEED, aim.strength / 100)
+    -- studs 0 = классическое % предсказание; >0 = упреждение на N стадов
+    local st = aim.studs or 0
+    if st > 0 then
+        return predictAt(targetPart, BULLET_SPEED, 1, st)
+    end
+    return predictAt(targetPart, BULLET_SPEED, aim.strength / 100, nil)
 end
 
 -- ВАЖНО: ремоут пистолета может меняться после обновлений MM2.
@@ -1194,6 +1287,16 @@ end)
 --------------------------------------------------
 local flingBusy = false
 local grabGun, grabBusy, grabLast = false, false, 0
+
+local function sheriffAlive()
+    for _, pl in ipairs(Players:GetPlayers()) do
+        if pl ~= LocalPlayer and getRole(pl) == "Sheriff" then
+            local h = pl.Character and pl.Character:FindFirstChildOfClass("Humanoid")
+            if h and h.Health > 0 then return true end
+        end
+    end
+    return false
+end
 
 -- GunDrop есть в workspace = шериф умер и пистолет ещё не подобрали
 local function doGrabGun()
@@ -1509,7 +1612,7 @@ RunService.Heartbeat:Connect(function()
 end)
 
 --------------------------------------------------
--- AUTOFARM МОНЕТ
+-- AUTOFARM МОНЕТ / CANDY (Halloween 2026)
 --------------------------------------------------
 local farm = {on = false, height = 3, speed = 30, limit = 40, flingMurd = false, reset = false, walls = true,
     safe = 0, count = 0, done = false, sessionCoins = 0, waitGame = true, startTime = 0, anchored = false}
@@ -1523,13 +1626,31 @@ local function findCoinContainer()
     cachedCC = nil
     if os.clock() - lastCCScan < 0.8 then return nil end
     lastCCScan = os.clock()
-    cachedCC = workspace:FindFirstChild("CoinContainer", true)
-    return cachedCC
+    -- Halloween 2026: Candies вместо Coins; пробуем оба
+    local names = {"CandyContainer", "CoinContainer", "Candies", "CandyFolder", "EventCandies"}
+    for _, n in ipairs(names) do
+        local f = workspace:FindFirstChild(n, true)
+        if f then cachedCC = f return f end
+    end
+    -- fallback: любая папка с «candy»/«coin» в имени и детьми-партами
+    for _, d in ipairs(workspace:GetDescendants()) do
+        if d:IsA("Folder") or d:IsA("Model") then
+            local ln = d.Name:lower()
+            if (ln:find("candy") or ln:find("coin")) and #d:GetChildren() > 0 then
+                cachedCC = d
+                return d
+            end
+        end
+    end
+    return nil
 end
 
 local function coinPart(c)
     if c:IsA("BasePart") then return c end
-    return c:FindFirstChildWhichIsA("BasePart", true)
+    local p = c:FindFirstChildWhichIsA("BasePart", true)
+    if p then return p end
+    -- Halloween: иногда candy — Model без BasePart сразу, ищем MeshPart
+    return c:FindFirstChildWhichIsA("MeshPart", true)
 end
 local function hasTouch(c) return c:FindFirstChildWhichIsA("TouchInterest", true) ~= nil end
 
@@ -1692,7 +1813,7 @@ task.spawn(function()
                         task.wait(0.06)
                     end
                     if got then
-                        farm.count = farm.count + 1
+                        farm.count += 1
                         farm.sessionCoins = (farm.sessionCoins or 0) + 1
                     else
                         coinSkip[coin] = os.clock() + 8
@@ -1728,7 +1849,7 @@ do
     corner(2, topBar)
     local titleLbl = new("TextLabel", {
         Size = UDim2.new(1, -16, 0, 22), Position = UDim2.new(0, 8, 0, 10),
-        BackgroundTransparency = 1, Text = "💰 AUTOFARM", TextColor3 = C.ACCENT,
+        BackgroundTransparency = 1, Text = "🍬 AUTOFARM", TextColor3 = C.ACCENT,
         TextSize = 13, Font = Enum.Font.GothamBold, TextXAlignment = Enum.TextXAlignment.Left,
     }, farmFrame)
     local coinsLbl = new("TextLabel", {
@@ -1748,7 +1869,7 @@ do
     RunService.Heartbeat:Connect(function()
         if farm.on then
             farmFrame.Visible = true
-            coinsLbl.Text = "Монеты: " .. tostring(farm.sessionCoins or 0)
+            coinsLbl.Text = "Candies: " .. tostring(farm.sessionCoins or 0)
             local st = farm.startTime or 0
             if st > 0 then
                 timeLbl.Text = "Время: " .. fmtTime(os.clock() - st)
@@ -1760,7 +1881,7 @@ do
             elseif farm.done then
                 titleLbl.Text = "✅ Лимит / ждём"
             else
-                titleLbl.Text = "💰 AUTOFARM"
+                titleLbl.Text = "🍬 AUTOFARM"
             end
         else
             farmFrame.Visible = false
@@ -1883,17 +2004,34 @@ local function spawnStars(pos)
     for _ = 1, fx.starCount do
         task.delay(math.random() * 0.6, function()
             local start = pos + Vector3.new((math.random() - 0.5) * 2.5, math.random() * 2 - 0.5, (math.random() - 0.5) * 2.5)
-            local part = new("Part", {Anchored = true, CanCollide = false, CanTouch = false, CanQuery = false,
-                Transparency = 1, Size = Vector3.new(0.2, 0.2, 0.2), Position = start}, workspace)
-            local bb = new("BillboardGui", {Size = UDim2.new(1.4, 0, 1.4, 0), AlwaysOnTop = true, LightInfluence = 0}, part)
-            local tl = new("TextLabel", {Size = UDim2.new(1, 0, 1, 0), BackgroundTransparency = 1, Text = "★",
-                TextScaled = true, TextColor3 = Color3.fromRGB(255, 230, 90), TextStrokeTransparency = 0.6,
-                TextStrokeColor3 = Color3.fromRGB(255, 170, 0), Font = Enum.Font.GothamBold}, bb)
-            TweenService:Create(part, TweenInfo.new(dur, Enum.EasingStyle.Sine, Enum.EasingDirection.Out),
-                {Position = start + Vector3.new((math.random() - 0.5) * 3, 9, (math.random() - 0.5) * 3)}):Play()
-            TweenService:Create(tl, TweenInfo.new(dur, Enum.EasingStyle.Quad, Enum.EasingDirection.In),
-                {TextTransparency = 1, TextStrokeTransparency = 1}):Play()
-            task.delay(dur + 0.1, function() part:Destroy() end)
+            -- Кастомная 3D-звезда (не emoji): 4 клина Neon
+            local folder = new("Folder", {Name = "MWStar"}, workspace)
+            local col = Color3.fromRGB(255, 220, 60)
+            local arms = {}
+            for i = 1, 4 do
+                local a = new("Part", {Anchored = true, CanCollide = false, CanTouch = false, CanQuery = false,
+                    CastShadow = false, Material = Enum.Material.Neon, Color = col,
+                    Size = Vector3.new(0.18, 0.18, 1.1), Transparency = 0.1}, folder)
+                arms[i] = a
+            end
+            local t0 = os.clock()
+            local conn
+            conn = RunService.Heartbeat:Connect(function()
+                local a = (os.clock() - t0) / dur
+                if a >= 1 or not folder.Parent then
+                    conn:Disconnect()
+                    folder:Destroy()
+                    return
+                end
+                local p = start + Vector3.new((math.random() - 0.5) * 0.02, 9 * a, (math.random() - 0.5) * 0.02)
+                local rot = a * math.pi * 2
+                local tr = 0.1 + 0.9 * a * a
+                for i, arm in ipairs(arms) do
+                    local ang = rot + (i - 1) * (math.pi / 2)
+                    arm.CFrame = CFrame.new(p) * CFrame.Angles(0, ang, math.rad(35))
+                    arm.Transparency = tr
+                end
+            end)
         end)
     end
 end
@@ -2408,7 +2546,7 @@ do -- карточки-уведомления: 1 строка - название
     local function makeToast(title, msg, kind)
         local old = active[title]
         if old and old.Parent then old:Destroy() end -- новое уведомление заменяет старое с тем же названием
-        order = order + 1
+        order += 1
         local col = kind == "off" and Color3.fromRGB(239, 68, 68)
             or (kind == "info" and Color3.fromRGB(110, 120, 255) or Color3.fromRGB(80, 220, 120))
         local card = new("Frame", {Size = UDim2.new(1, 0, 0, 54), BackgroundColor3 = X.cardColor or Color3.fromRGB(14, 14, 20),
@@ -2681,9 +2819,8 @@ end)
 
 --------------------------------------------------
 -- v10: NameProtect+, GunModel, KillFeed, JumpCircle
--- (в отдельной функции: у неё свой лимит локальных переменных)
 --------------------------------------------------
-X.initV10 = function()
+do
 local CoreGui = nil
 pcall(function() CoreGui = game:GetService("CoreGui") end)
 
@@ -2864,7 +3001,7 @@ local kf = {on = false, hideInn = true, hideMur = true, hideShe = true}
 X.kf = kf
 local kfGui = makeGui("ManewareKF", 99994)
 local kfRoot = new("Frame", {Name = "KF", Size = UDim2.new(0, 270, 0, 190), Position = UDim2.new(0, 12, 0.3, 0),
-    BackgroundTransparency = 1, Active = false}, kfGui)
+    BackgroundTransparency = 1, Active = true}, kfGui)
 X.kfRoot = kfRoot
 local kfList = new("Frame", {Size = UDim2.new(1, 0, 1, 0), BackgroundTransparency = 1}, kfRoot)
 new("UIListLayout", {Padding = UDim.new(0, 5), SortOrder = Enum.SortOrder.LayoutOrder,
@@ -2878,7 +3015,7 @@ local function rt(s) return (tostring(s):gsub("&", "&amp;"):gsub("<", "&lt;"):gs
 local function nmOf(pl) if pl == LocalPlayer then return displayName() end return pl.DisplayName end
 local kfOrder, kfCards = 0, {}
 local function kfPush(kName, kRole, vName, vRole)
-    kfOrder = kfOrder + 1
+    kfOrder += 1
     local card = new("Frame", {Size = UDim2.new(1, 0, 0, 30), BackgroundColor3 = Color3.fromRGB(12, 12, 16),
         BackgroundTransparency = 1, BorderSizePixel = 0, LayoutOrder = kfOrder}, kfList)
     corner(8, card)
@@ -3035,9 +3172,360 @@ X.buildNew = function()
     tj.Section("⭕ JumpCircle")
     tj.Toggle("JumpCircle", false, function(v) jc.on = v end, ICONS.FLY)
     tj.Slider("JumpCircle: Size", 1, 8, 3, " st", function(v) jc.size = v end, 0.5)
+
+    ----------------------------------------------------------------
+    -- KNIFEMODEL: butterfly / karambit / nether (только поиск, на нож)
+    ----------------------------------------------------------------
+    local km = {on = false, sel = 1, size = 1, rot = 0, busy = false, fail = 0, cur = nil}
+    local KM_SLOTS = {
+        {key = "km_bf1", label = "Butterfly", q = "csgo butterfly knife"},
+        {key = "km_bf2", label = "Butterfly #2", q = "butterfly knife csgo"},
+        {key = "km_bf3", label = "Butterfly #3", q = "butterfly knife morph"},
+        {key = "km_kar1", label = "Karambit", q = "csgo karambit"},
+        {key = "km_kar2", label = "Karambit #2", q = "karambit knife"},
+        {key = "km_kar3", label = "Karambit #3", q = "karambit morph"},
+        {key = "km_neth1", label = "Nether", q = "netherite sword minecraft"},
+        {key = "km_neth2", label = "Nether #2", q = "minecraft netherite sword"},
+        {key = "km_neth3", label = "Nether #3", q = "netherite sword"},
+    }
+    local kmHidden = {}
+    local function kmClearAll()
+        km.cur = nil
+        local conts = {}
+        if myChar() then table.insert(conts, myChar()) end
+        local bp = LocalPlayer:FindFirstChild("Backpack")
+        if bp then table.insert(conts, bp) end
+        for _, cont in ipairs(conts) do
+            for _, tool in ipairs(cont:GetChildren()) do
+                local o = tool:FindFirstChild("MWKnifeModel")
+                if o then o:Destroy() end
+            end
+        end
+        for inst, tr in pairs(kmHidden) do pcall(function() inst.Transparency = tr end) end
+        kmHidden = {}
+    end
+    local function kmApply(knife, key)
+        km.busy = true
+        task.spawn(function()
+            local ok = pcall(function()
+                local slot = KM_SLOTS[km.sel]
+                local id = resolveModelSlot(slot)
+                local tpl = id and fetchModel(id)
+                if not tpl then
+                    km.fail = os.clock()
+                    notify("KnifeModel: " .. slot.label .. " не найден (ID вручную)")
+                    return
+                end
+                local handle = knife:FindFirstChild("Handle") or knife:FindFirstChildWhichIsA("BasePart")
+                if not handle or not knife.Parent or not km.on then return end
+                local m = tpl:Clone()
+                m.Name = "MWKnifeModel"
+                local kill = {}
+                for _, d in ipairs(m:GetDescendants()) do
+                    if d:IsA("BaseScript") or d:IsA("Humanoid") then table.insert(kill, d) end
+                end
+                for _, d in ipairs(kill) do pcall(function() d:Destroy() end) end
+                pcall(function() m:ScaleTo(km.size) end)
+                local parts = {}
+                for _, d in ipairs(m:GetDescendants()) do
+                    if d:IsA("BasePart") then
+                        d.Anchored = false d.CanCollide = false d.CanTouch = false
+                        d.CanQuery = false d.Massless = true
+                        table.insert(parts, d)
+                    end
+                end
+                local primary = m.PrimaryPart or parts[1]
+                if not primary then return end
+                m.Parent = knife
+                m:PivotTo(handle.CFrame * CFrame.Angles(0, math.rad(km.rot), 0))
+                for _, pt in ipairs(parts) do
+                    if pt ~= primary then
+                        local w = Instance.new("WeldConstraint")
+                        w.Part0, w.Part1 = primary, pt
+                        w.Parent = primary
+                    end
+                end
+                local w0 = Instance.new("WeldConstraint")
+                w0.Part0, w0.Part1 = handle, primary
+                w0.Parent = primary
+                for _, d in ipairs(knife:GetDescendants()) do
+                    if not d:IsDescendantOf(m) and (d:IsA("BasePart") or d:IsA("Decal") or d:IsA("Texture")) then
+                        kmHidden[d] = d.Transparency
+                        d.Transparency = 1
+                    end
+                end
+                km.cur = key
+                notify("KnifeModel: " .. slot.label .. " ✔")
+            end)
+            if not ok then km.fail = os.clock() end
+            km.busy = false
+        end)
+    end
+    task.spawn(function()
+        while true do
+            task.wait(0.45)
+            if not km.on then
+                if km.cur then pcall(kmClearAll) end
+            elseif not km.busy then
+                pcall(function()
+                    local c = myChar()
+                    local knife = c and (c:FindFirstChild("Knife") or c:FindFirstChild("Classic Knife"))
+                    if not knife then
+                        -- ножа нет в руках — модель не видна
+                        if km.cur then
+                            local old = nil
+                            for _, cont in ipairs({c, LocalPlayer:FindFirstChild("Backpack")}) do
+                                if cont then
+                                    for _, tool in ipairs(cont:GetChildren()) do
+                                        local o = tool:FindFirstChild("MWKnifeModel")
+                                        if o then o:Destroy() end
+                                    end
+                                end
+                            end
+                            km.cur = nil
+                        end
+                        return
+                    end
+                    local key = km.sel .. "|" .. km.size .. "|" .. km.rot
+                    if knife:FindFirstChild("MWKnifeModel") and km.cur == key then return end
+                    if os.clock() - km.fail < 6 then return end
+                    kmClearAll()
+                    kmApply(knife, key)
+                end)
+            end
+        end
+    end)
+
+    local tk = addTab("KnifeModel", ICONS.AIM)
+    tk.Section("🔪 Модель ножа (поиск, не создание)")
+    local kLabs = {}
+    for i, s in ipairs(KM_SLOTS) do kLabs[i] = s.label end
+    tk.ToggleDrop("KnifeModel", false, function(v)
+        km.on = v
+        if not v then pcall(kmClearAll) end
+    end, ICONS.AIM, kLabs, 1, function(i) km.sel = i km.fail = 0 end)
+    tk.Slider("KnifeModel: Size", 0.10, 10, 1, "x", function(v) km.size = v end, 0.05)
+    tk.Slider("KnifeModel: Rotate", 0, 360, 0, "°", function(v) km.rot = v end, 90)
+    local kBox = tk.TextBox("ID модели ножа вручную")
+    tk.Button("✔ Применить ID к KnifeModel", function()
+        local id = tonumber(kBox.Text)
+        if not id then notify("Введи числовой ID") return end
+        if not fetchModel(id) then notify("Модель не загрузилась") return end
+        assetCache["model:" .. KM_SLOTS[km.sel].key] = id
+        saveAssets()
+        km.fail = 0
+        km.cur = nil
+        notify("KnifeModel ID: " .. id)
+    end)
+
+    ----------------------------------------------------------------
+    -- USERNASH: лого над головой игроков Maneware
+    ----------------------------------------------------------------
+    local un = {on = false}
+    local unTags = {}
+    local function unClear(pl)
+        local t = unTags[pl]
+        if t then pcall(function() t:Destroy() end) unTags[pl] = nil end
+    end
+    local function unApply(pl)
+        if not un.on or not pl then return end
+        local ch = pl.Character
+        local head = ch and ch:FindFirstChild("Head")
+        if not head then return end
+        if unTags[pl] and unTags[pl].Parent then return end
+        unClear(pl)
+        local bb = new("BillboardGui", {Name = "MWUserNash", Size = UDim2.new(0, 48, 0, 48),
+            StudsOffset = Vector3.new(0, 3.2, 0), AlwaysOnTop = true, MaxDistance = 120}, head)
+        local img = new("ImageLabel", {Size = UDim2.new(1, 0, 1, 0), BackgroundColor3 = Color3.fromRGB(30, 20, 55),
+            BackgroundTransparency = 0.25, Image = LOGO_ID, ScaleType = Enum.ScaleType.Fit, BorderSizePixel = 0}, bb)
+        corner(10, img)
+        new("UIStroke", {Color = C.ACCENT, Thickness = 1.5}, img)
+        unTags[pl] = bb
+    end
+    -- Помечаем себя как Maneware-юзера
+    pcall(function() LocalPlayer:SetAttribute("ManewareUser", true) end)
+    task.spawn(function()
+        while true do
+            task.wait(1)
+            pcall(function()
+                if not un.on then
+                    for pl in pairs(unTags) do unClear(pl) end
+                    return
+                end
+                for _, pl in ipairs(Players:GetPlayers()) do
+                    -- свой + те, у кого атрибут ManewareUser (если реплицируется) или DisplayName с меткой
+                    local isMw = (pl == LocalPlayer)
+                        or (pl:GetAttribute("ManewareUser") == true)
+                        or (tostring(pl:GetAttribute("MW") or "") == "1")
+                    if isMw then unApply(pl) else unClear(pl) end
+                end
+            end)
+        end
+    end)
+    Players.PlayerRemoving:Connect(function(pl) unClear(pl) end)
+
+    local tu = addTab("UserNash", ICONS.HAT)
+    tu.Section("🏷 UserNash — лого над головой Maneware")
+    tu.Toggle("UserNash", false, function(v) un.on = v if not v then for pl in pairs(unTags) do unClear(pl) end end end, ICONS.HAT)
+
+    ----------------------------------------------------------------
+    -- CHATMANEWARE: локальный чат для юзеров Maneware
+    ----------------------------------------------------------------
+    local chat = {on = false}
+    local chatGui = makeGui("ManewareChat", 99993)
+    local chatBtn = new("TextButton", {Size = UDim2.new(0, 52, 0, 52), Position = UDim2.new(0, 12, 1, -120),
+        BackgroundColor3 = C.ACCENT, Text = "MW", TextColor3 = C.TEXT, TextSize = 16,
+        Font = Enum.Font.GothamBold, BorderSizePixel = 0, AutoButtonColor = true}, chatGui)
+    corner(14, chatBtn)
+    new("UIStroke", {Color = Color3.new(1, 1, 1), Thickness = 1.5}, chatBtn)
+
+    local chatFrame = new("Frame", {Size = UDim2.new(0, 280, 0, 220), Position = UDim2.new(0, 12, 1, -350),
+        BackgroundColor3 = Color3.fromRGB(14, 14, 20), BorderSizePixel = 0, Visible = false, Active = true}, chatGui)
+    corner(12, chatFrame)
+    new("UIStroke", {Color = C.ACCENT, Thickness = 2}, chatFrame)
+    local chatTitle = new("TextLabel", {Size = UDim2.new(1, -70, 0, 28), Position = UDim2.new(0, 10, 0, 4),
+        BackgroundTransparency = 1, Text = "Maneware Chat", TextColor3 = C.ACCENT, TextSize = 14,
+        Font = Enum.Font.GothamBold, TextXAlignment = Enum.TextXAlignment.Left}, chatFrame)
+    local chatClose = new("TextButton", {Size = UDim2.new(0, 28, 0, 28), Position = UDim2.new(1, -34, 0, 4),
+        BackgroundColor3 = C.RED, Text = "✕", TextColor3 = C.TEXT, TextSize = 14, Font = Enum.Font.GothamBold,
+        BorderSizePixel = 0}, chatFrame)
+    corner(8, chatClose)
+    -- resize handle
+    local resize = new("TextButton", {Size = UDim2.new(0, 22, 0, 22), Position = UDim2.new(1, -22, 1, -22),
+        BackgroundColor3 = C.BORDER, Text = "↘", TextColor3 = C.DIM, TextSize = 12, BorderSizePixel = 0,
+        AutoButtonColor = false}, chatFrame)
+    corner(6, resize)
+
+    local msgScroll = new("ScrollingFrame", {Size = UDim2.new(1, -12, 1, -70), Position = UDim2.new(0, 6, 0, 34),
+        BackgroundColor3 = Color3.fromRGB(20, 20, 28), BorderSizePixel = 0, ScrollBarThickness = 4,
+        CanvasSize = UDim2.new(0, 0, 0, 0), AutomaticCanvasSize = Enum.AutomaticSize.Y}, chatFrame)
+    corner(8, msgScroll)
+    local msgList = new("UIListLayout", {Padding = UDim.new(0, 4), SortOrder = Enum.SortOrder.LayoutOrder}, msgScroll)
+    new("UIPadding", {PaddingTop = UDim.new(0, 4), PaddingBottom = UDim.new(0, 4),
+        PaddingLeft = UDim.new(0, 6), PaddingRight = UDim.new(0, 6)}, msgScroll)
+
+    local inputBox = new("TextBox", {Size = UDim2.new(1, -70, 0, 32), Position = UDim2.new(0, 6, 1, -38),
+        BackgroundColor3 = C.ELEMENT, Text = "", PlaceholderText = "Сообщение…", PlaceholderColor3 = C.DIM,
+        TextColor3 = C.TEXT, TextSize = 13, Font = Enum.Font.GothamSemibold, ClearTextOnFocus = false,
+        BorderSizePixel = 0}, chatFrame)
+    corner(8, inputBox)
+    local sendBtn = new("TextButton", {Size = UDim2.new(0, 54, 0, 32), Position = UDim2.new(1, -60, 1, -38),
+        BackgroundColor3 = C.ACCENT, Text = "➤", TextColor3 = C.TEXT, TextSize = 16,
+        Font = Enum.Font.GothamBold, BorderSizePixel = 0}, chatFrame)
+    corner(8, sendBtn)
+
+    local msgOrder = 0
+    local function chatAdd(nick, text)
+        msgOrder = msgOrder + 1
+        local row = new("TextLabel", {Size = UDim2.new(1, -8, 0, 0), AutomaticSize = Enum.AutomaticSize.Y,
+            BackgroundTransparency = 1, RichText = true, TextWrapped = true, TextSize = 13,
+            Font = Enum.Font.GothamSemibold, TextXAlignment = Enum.TextXAlignment.Left,
+            TextColor3 = C.TEXT, LayoutOrder = msgOrder,
+            Text = string.format('<font color="#a5b4fc">"%s"</font> %s',
+                tostring(nick):gsub("<", "&lt;"), tostring(text):gsub("<", "&lt;"))}, msgScroll)
+        task.defer(function()
+            msgScroll.CanvasPosition = Vector2.new(0, msgScroll.AbsoluteCanvasSize.Y)
+        end)
+    end
+
+    local PREFIX = "[MWCHAT]"
+    local function chatSend()
+        local text = tostring(inputBox.Text or ""):gsub("^%s+", ""):gsub("%s+$", "")
+        if text == "" then return end
+        inputBox.Text = ""
+        local nick = displayName()
+        chatAdd(nick, text)
+        -- Рассылка через обычный чат с префиксом — другие Maneware-клиенты подхватят
+        pcall(function()
+            local payload = PREFIX .. HttpService:JSONEncode({n = nick, m = text})
+            if game:GetService("TextChatService") then
+                local tcs = game:GetService("TextChatService")
+                local ch = tcs.TextChannels and tcs.TextChannels:FindFirstChild("RBXGeneral")
+                if ch then ch:SendAsync(payload) return end
+            end
+            local chatSvc = game:GetService("Chat")
+            chatSvc:Chat(myChar() and myChar():FindFirstChild("Head"), payload, Enum.ChatColor.White)
+        end)
+        pcall(function() LocalPlayer:SetAttribute("MWLastMsg", text) end)
+    end
+    onTap(sendBtn, chatSend)
+    inputBox.FocusLost:Connect(function(enter) if enter then chatSend() end end)
+
+    onTap(chatBtn, function()
+        chatFrame.Visible = not chatFrame.Visible
+    end)
+    onTap(chatClose, function() chatFrame.Visible = false end)
+
+    -- drag chat window
+    do
+        local drag, sPos, sU = false, nil, nil
+        chatTitle.InputBegan:Connect(function(i)
+            if i.UserInputType == Enum.UserInputType.Touch or i.UserInputType == Enum.UserInputType.MouseButton1 then
+                drag, sPos, sU = true, i.Position, chatFrame.Position
+            end
+        end)
+        UIS.InputChanged:Connect(function(i)
+            if drag and (i.UserInputType == Enum.UserInputType.Touch or i.UserInputType == Enum.UserInputType.MouseMovement) then
+                local d = i.Position - sPos
+                chatFrame.Position = UDim2.new(sU.X.Scale, sU.X.Offset + d.X, sU.Y.Scale, sU.Y.Offset + d.Y)
+            end
+        end)
+        UIS.InputEnded:Connect(function(i)
+            if i.UserInputType == Enum.UserInputType.Touch or i.UserInputType == Enum.UserInputType.MouseButton1 then drag = false end
+        end)
+    end
+    -- resize
+    do
+        local rs, start, startSize = false, nil, nil
+        resize.InputBegan:Connect(function(i)
+            if i.UserInputType == Enum.UserInputType.Touch or i.UserInputType == Enum.UserInputType.MouseButton1 then
+                rs, start, startSize = true, i.Position, chatFrame.AbsoluteSize
+            end
+        end)
+        UIS.InputChanged:Connect(function(i)
+            if rs and (i.UserInputType == Enum.UserInputType.Touch or i.UserInputType == Enum.UserInputType.MouseMovement) then
+                local d = i.Position - start
+                local w = math.clamp(startSize.X + d.X, 200, 500)
+                local h = math.clamp(startSize.Y + d.Y, 160, 450)
+                chatFrame.Size = UDim2.new(0, w, 0, h)
+            end
+        end)
+        UIS.InputEnded:Connect(function(i)
+            if i.UserInputType == Enum.UserInputType.Touch or i.UserInputType == Enum.UserInputType.MouseButton1 then rs = false end
+        end)
+    end
+
+    -- Приём сообщений MW из чата
+    local function onChatMsg(pl, msg)
+        if type(msg) ~= "string" or not msg:find(PREFIX, 1, true) then return end
+        local json = msg:sub(#PREFIX + 1)
+        local ok, data = pcall(function() return HttpService:JSONDecode(json) end)
+        if ok and type(data) == "table" and data.m then
+            if pl ~= LocalPlayer then
+                chatAdd(data.n or pl.DisplayName, data.m)
+            end
+        end
+    end
+    Players.PlayerChatted:Connect(function(cobj)
+        -- legacy
+    end)
+    pcall(function()
+        local tcs = game:GetService("TextChatService")
+        tcs.MessageReceived:Connect(function(msg)
+            local pl = Players:GetPlayerByUserId(msg.TextSource and msg.TextSource.UserId or 0)
+            if pl then onChatMsg(pl, msg.Text) end
+        end)
+    end)
+    for _, pl in ipairs(Players:GetPlayers()) do
+        pl.Chatted:Connect(function(msg) onChatMsg(pl, msg) end)
+    end
+    Players.PlayerAdded:Connect(function(pl)
+        pl.Chatted:Connect(function(msg) onChatMsg(pl, msg) end)
+    end)
+
+    chatAdd("System", "Чат Maneware готов. Пиши снизу.")
 end
-end -- v10 блок
-xpcall(X.initV10, function(e) warn("[Maneware] v10 init: " .. tostring(e)) end)
+end -- v10/v11 блок
 
 local function buildUI()
 --------------------------------------------------
@@ -3109,7 +3597,8 @@ t3.Toggle("Sheriff Aim (авто-выстрел в убийцу)", false, functi
 t3.Toggle("Visible Check (вкл: только если виден / выкл: сквозь стены)", true, function(v) aim.visible = v end, ICONS.EYE)
 t3.Toggle("Hacker (пуля сквозь стены)", false, function(v) aim.hacker = v end, ICONS.SHIELD)
 t3.Toggle("Предсказание (куда прибежит) / выкл: прямо в него", true, function(v) aim.predict = v end, ICONS.TARGET)
-t3.Slider("Сила предсказания", 0, 200, 100, "%", function(v) aim.strength = v end)
+t3.Slider("Предсказание (стады)", 0, 10, 3, " st", function(v) aim.studs = v end, 0.5)
+t3.Slider("Сила предсказания % (если стады=0)", 0, 200, 100, "%", function(v) aim.strength = v end)
 t3.Slider("Дальность", 50, 500, 250, " st", function(v) aim.range = v end)
 t3.Slider("Задержка между выстрелами", 3, 30, 10, " ×0.1с", function(v) aim.cd = v / 10 end)
 
@@ -3225,9 +3714,7 @@ local MM2_MAPS = {
     "Ice Castle", "Village", "Colosseum", "Zoo", "Train Station", "Workshop",
 }
 local dupe = {map = 1, amount = 5, busy = false, rec = false, cap = nil, hooked = false}
-local function installHook()
-    if dupe.hooked then return true end
-    pcall(function()
+pcall(function()
     if hookmetamethod and getnamecallmethod then
         local old
         local function hk(self, ...)
@@ -3236,7 +3723,7 @@ local function installHook()
                 if (m == "FireServer" or m == "InvokeServer") and typeof(self) == "Instance" then
                     local n = self.Name:lower()
                     if n:find("vote") or n:find("map") then
-                        dupe.cap = {r = self, m = m, a = {n = select("#", ...), ...}}
+                        dupe.cap = {r = self, m = m, a = table.pack(...)}
                         task.defer(notify, "DupeVote: записан " .. self.Name)
                     end
                 end
@@ -3246,13 +3733,10 @@ local function installHook()
         old = hookmetamethod(game, "__namecall", newcclosure and newcclosure(hk) or hk)
         dupe.hooked = true
     end
-    end)
-    return dupe.hooked
-end
+end)
 
 local function mapArgs(args)
-    local out = {n = args.n}
-    for i = 1, args.n do out[i] = args[i] end
+    local out = table.pack(table.unpack(args, 1, args.n))
     local mapName = MM2_MAPS[dupe.map]
     for i = 1, out.n do
         if type(out[i]) == "string" then
@@ -3300,10 +3784,10 @@ local function doDupeVote()
             for _ = 1, amt do
                 local a = mapArgs(cap.a)
                 if cap.m == "FireServer" then
-                    if pcall(function() cap.r:FireServer((table.unpack or unpack)(a, 1, a.n)) end) then sent = sent + 1 end
+                    if pcall(function() cap.r:FireServer(table.unpack(a, 1, a.n)) end) then sent += 1 end
                 else
-                    task.spawn(function() pcall(function() cap.r:InvokeServer((table.unpack or unpack)(a, 1, a.n)) end) end)
-                    sent = sent + 1
+                    task.spawn(function() pcall(function() cap.r:InvokeServer(table.unpack(a, 1, a.n)) end) end)
+                    sent += 1
                 end
                 task.wait(0.05)
             end
@@ -3315,7 +3799,7 @@ local function doDupeVote()
                 for _, d in ipairs(pg:GetDescendants()) do
                     if d:IsA("GuiButton") and btnMatches(d, mapName) then
                         for _ = 1, amt do
-                            if clickBtn(d) then sent = sent + 1 end
+                            if clickBtn(d) then sent += 1 end
                             task.wait(0.05)
                         end
                         break
@@ -3334,7 +3818,7 @@ local function doDupeVote()
                             else
                                 task.spawn(function() pcall(function() d:InvokeServer(mapName) end) end)
                             end
-                            sent = sent + 1
+                            sent += 1
                             task.wait(0.05)
                         end
                     end
@@ -3356,7 +3840,7 @@ tDV.ToggleDrop("Карта", true, function() end, ICONS.TP, mapLabels, 1, funct
 end)
 tDV.Slider("Количество голосов", 1, 40, 5, "", function(v) dupe.amount = v end)
 tDV.Toggle("DupeVote: запись (проголосуй вручную)", false, function(v)
-    if v and not installHook() then notify("DupeVote: нет hookmetamethod") return end
+    if v and not dupe.hooked then notify("DupeVote: нет hookmetamethod") return end
     dupe.rec = v
     if v then dupe.cap = nil notify("DupeVote: проголосуй за любую карту") end
 end, ICONS.UTIL)
@@ -3516,7 +4000,7 @@ end, ICONS.EYE, {
 end)
 
 -- v10: GunModel и JumpCircle
-if X.buildNew then pcall(X.buildNew) end
+pcall(X.buildNew)
 
 -- Configs
 local t9 = addTab("Configs", ICONS.UTIL)
@@ -3616,10 +4100,10 @@ local function setMenu(show)
     menuVisible = show
     if show then
         main.Visible = true
-        tw(main, 0.3, {Size = FULL})
+        main.Size = FULL
+        pcall(function() tw(main, 0.2, {Size = FULL}) end)
     else
-        tw(main, 0.25, {Size = UDim2.new(0, 0, 0, 0)})
-        task.delay(0.26, function() if not menuVisible then main.Visible = false end end)
+        main.Visible = false
     end
 end
 
@@ -3678,7 +4162,7 @@ if uiData.kf then pcall(function() X.kfRoot.Position = tblToPos(uiData.kf) end) 
 -- Watermark
 local wmGui = makeGui("ManewareWM", 99996)
 local wmRoot = new("Frame", {Name = "WM", AutomaticSize = Enum.AutomaticSize.XY, Size = UDim2.new(0, 0, 0, 0),
-    BackgroundTransparency = 1, Active = false, Visible = false, AnchorPoint = Vector2.new(0.5, 0),
+    BackgroundTransparency = 1, Active = true, Visible = false, AnchorPoint = Vector2.new(0.5, 0),
     Position = UDim2.new(0.5, 0, 0, 14)}, wmGui)
 if uiData.wm then pcall(function() wmRoot.Position = tblToPos(uiData.wm) end) end
 local wmScale = new("UIScale", {Scale = 1}, wmRoot)
@@ -3760,7 +4244,7 @@ local function createBind(name, pos)
     local run, getState = bindInfo(name)
     if not run then return false end
     local n = 0
-    for _ in pairs(bindButtons) do n = n + 1 end
+    for _ in pairs(bindButtons) do n += 1 end
     local btn = new("TextButton", {Size = UDim2.new(0, 70, 0, 42),
         Position = pos or UDim2.new(0.5, -105 + (n % 4) * 76, 0.3, math.floor(n / 4) * 50),
         BackgroundColor3 = C.ELEMENT, Text = name, TextColor3 = C.TEXT, TextScaled = true, Font = Enum.Font.GothamBold,
@@ -3843,8 +4327,6 @@ local function exitEdit()
     if not EDIT.mode then return end
     EDIT.mode = nil
     clearBoxes()
-    X.kfRoot.Active = false
-    wmRoot.Active = false
     catcher.Visible = false
     saveUI()
     notify("Позиции сохранены")
@@ -3868,10 +4350,8 @@ local function enterEdit(mode)
     if mode == "fab" then
         editBox(fab, true)
     elseif mode == "wm" then
-        wmRoot.Active = true
         editBox(wmRoot, true)
     elseif mode == "kf" then
-        X.kfRoot.Active = true
         editBox(X.kfRoot, true)
     else
         for _, b in pairs(bindButtons) do editBox(b, true) end
@@ -4125,4 +4605,8 @@ if not okUI then
     notify("Ошибка UI: " .. tostring(errUI))
 end
 
-print("[Maneware] v10 загружен")
+print("[Maneware] v11 загружен")
+pcall(function()
+    print("[Maneware] hub parent=", hubGui and hubGui.Parent and hubGui.Parent.Name)
+    print("[Maneware] main size=", main and main.AbsoluteSize)
+end)
