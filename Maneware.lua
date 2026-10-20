@@ -1,5 +1,27 @@
+-- Probe: плашка на 5 секунд, показывает что скрипт вообще компилируется и запускается
+pcall(function()
+    local g = Instance.new("ScreenGui")
+    g.Name = "MWProbe"
+    g.ResetOnSpawn = false
+    g.DisplayOrder = 2147483647
+    local l = Instance.new("TextLabel")
+    l.Size = UDim2.new(0, 240, 0, 36)
+    l.Position = UDim2.new(0.5, -120, 0, 40)
+    l.BackgroundColor3 = Color3.fromRGB(99, 102, 241)
+    l.TextColor3 = Color3.new(1, 1, 1)
+    l.TextSize = 16
+    l.Font = Enum.Font.GothamBold
+    l.Text = "Maneware: скрипт запущен"
+    l.Parent = g
+    local ok = pcall(function() g.Parent = (gethui and gethui()) or game:GetService("CoreGui") end)
+    if not ok or not g.Parent then
+        g.Parent = game:GetService("Players").LocalPlayer:WaitForChild("PlayerGui")
+    end
+    task.delay(5, function() g:Destroy() end)
+end)
+
 -- Maneware MM2 v11 | Mobile (Delta)
--- v11: ChatManeware, UserNash, KnifeModel, Autofarm Candy (Halloween), Aim studs, custom stars
+-- v11.2: GUI fix for Delta 2.743.1136 (gethui -> CoreGui -> PlayerGui, watchdog, probe)
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local UIS = game:GetService("UserInputService")
@@ -104,50 +126,46 @@ local function tw(o, t, p)
     if ok then tween:Play() return tween end
 end
 local function corner(r, p) return new("UICorner", {CornerRadius = UDim.new(0, r or 8)}, p) end
-local function getGuiParent()
-    -- Delta / мобильные экзекуторы: пробуем все варианты родителя
-    local candidates = {}
-    pcall(function()
-        if gethui then
-            local h = gethui()
-            if h then table.insert(candidates, h) end
-        end
-    end)
-    pcall(function()
-        local cg = game:GetService("CoreGui")
-        if cg then table.insert(candidates, cg) end
-    end)
-    pcall(function()
-        local pg = LocalPlayer:FindFirstChild("PlayerGui") or LocalPlayer:WaitForChild("PlayerGui", 5)
-        if pg then table.insert(candidates, pg) end
-    end)
-    return candidates[1]
+-- Порядок родителей: gethui -> CoreGui -> PlayerGui
+local function getGuiParents()
+    local list = {}
+    pcall(function() if gethui then table.insert(list, gethui()) end end)
+    pcall(function() table.insert(list, game:GetService("CoreGui")) end)
+    local pg = LocalPlayer:FindFirstChild("PlayerGui")
+    if not pg then pcall(function() pg = LocalPlayer:WaitForChild("PlayerGui", 8) end) end
+    if pg then table.insert(list, pg) end
+    return list
 end
 local function makeGui(name, order)
-    local parent = getGuiParent()
-    if not parent then
-        warn("[Maneware] GUI parent not found for " .. tostring(name))
-        parent = LocalPlayer:WaitForChild("PlayerGui", 10)
+    local parents = getGuiParents()
+    for _, p in ipairs(parents) do
+        pcall(function()
+            local old = p:FindFirstChild(name)
+            if old then old:Destroy() end
+        end)
     end
-    -- убираем старый GUI с тем же именем
-    pcall(function()
-        local old = parent:FindFirstChild(name)
-        if old then old:Destroy() end
-    end)
-    local sg = new("ScreenGui", {
-        Name = name,
-        ResetOnSpawn = false,
-        IgnoreGuiInset = true,
-        DisplayOrder = order or 100,
-        Enabled = true,
-        ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
-    }, parent)
-    -- protect_gui если есть (Synapse/некоторые форки)
-    pcall(function()
-        if syn and syn.protect_gui then syn.protect_gui(sg) end
-    end)
-    pcall(function()
-        if protect_gui then protect_gui(sg) end
+    local sg = Instance.new("ScreenGui")
+    sg.Name = name
+    sg.ResetOnSpawn = false
+    sg.IgnoreGuiInset = true
+    sg.DisplayOrder = order or 100
+    sg.Enabled = true
+    sg.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+    pcall(function() sg.ClipToDeviceSafeArea = false end)
+    pcall(function() if syn and syn.protect_gui then syn.protect_gui(sg) end end)
+    pcall(function() if protect_gui then protect_gui(sg) end end)
+    local function attach()
+        for _, p in ipairs(parents) do
+            local ok = pcall(function() sg.Parent = p end)
+            if ok and sg.Parent == p then return true end
+        end
+        return false
+    end
+    if not attach() then warn("[Maneware] ScreenGui " .. name .. " не удалось прикрепить") end
+    task.spawn(function() -- если кто-то снял GUI с родителя, вернуть
+        while task.wait(1) do
+            if not sg.Parent then attach() end
+        end
     end)
     return sg
 end
@@ -238,6 +256,13 @@ do
     end)
 end
 
+
+-- Emergency show (до тяжёлого buildUI)
+pcall(function()
+    main.Visible = true
+    main.Size = FULL
+    print("[Maneware] early GUI parent=", hubGui and hubGui.Parent)
+end)
 
 local topbar = new("Frame", {Size = UDim2.new(1, 0, 0, 55), BackgroundColor3 = C.TOPBAR, BorderSizePixel = 0, Active = true}, main)
 local logoImg = new("ImageLabel", {Size = UDim2.new(0, 32, 0, 32), Position = UDim2.new(0, 12, 0.5, -16),
@@ -732,8 +757,8 @@ RunService.RenderStepped:Connect(function(dt)
     local cf = Camera.CFrame
     local rel = cf:VectorToObjectSpace(hum.MoveDirection)
     local dir = cf.LookVector * -rel.Z + cf.RightVector * rel.X
-    if UIS:IsKeyDown(Enum.KeyCode.Space) or flyUp then dir += Vector3.yAxis end
-    if UIS:IsKeyDown(Enum.KeyCode.LeftShift) or flyDown then dir -= Vector3.yAxis end
+    if UIS:IsKeyDown(Enum.KeyCode.Space) or flyUp then dir = dir + Vector3.yAxis end
+    if UIS:IsKeyDown(Enum.KeyCode.LeftShift) or flyDown then dir = dir - Vector3.yAxis end
     if dir.Magnitude > 0 then
         bodyVel.Velocity = bodyVel.Velocity:Lerp(dir.Unit * flySpeed, math.min(1, dt * 12))
     else
@@ -848,7 +873,7 @@ local function applyTarget()
                 end
             end
             bb.Enabled = true
-            angle += dt * 70 * tgt.speed
+            angle = angle + dt * 70 * tgt.speed
             spin.Rotation = angle % 360
         else
             bb.Enabled = false
@@ -1034,9 +1059,11 @@ RunService.Stepped:Connect(function()
     end
 end)
 
+local fpsBoost
+do -- fpsSaved/fpsConn спрятаны в блок (экономим локальные переменные)
 local fpsSaved = {}
 local fpsConn = nil
-local function fpsBoost(on)
+fpsBoost = function(on)
     if fpsConn then fpsConn:Disconnect() fpsConn = nil end
     if on then
         fpsSaved = {}
@@ -1105,6 +1132,7 @@ local function fpsBoost(on)
         notify("FPS Boost: выкл")
     end
 end
+end -- конец блока fps
 
 --------------------------------------------------
 -- SHERIFF AIM
@@ -1287,16 +1315,6 @@ end)
 --------------------------------------------------
 local flingBusy = false
 local grabGun, grabBusy, grabLast = false, false, 0
-
-local function sheriffAlive()
-    for _, pl in ipairs(Players:GetPlayers()) do
-        if pl ~= LocalPlayer and getRole(pl) == "Sheriff" then
-            local h = pl.Character and pl.Character:FindFirstChildOfClass("Humanoid")
-            if h and h.Health > 0 then return true end
-        end
-    end
-    return false
-end
 
 -- GunDrop есть в workspace = шериф умер и пистолет ещё не подобрали
 local function doGrabGun()
@@ -1813,7 +1831,7 @@ task.spawn(function()
                         task.wait(0.06)
                     end
                     if got then
-                        farm.count += 1
+                        farm.count = farm.count + 1
                         farm.sessionCoins = (farm.sessionCoins or 0) + 1
                     else
                         coinSkip[coin] = os.clock() + 8
@@ -2546,7 +2564,7 @@ do -- карточки-уведомления: 1 строка - название
     local function makeToast(title, msg, kind)
         local old = active[title]
         if old and old.Parent then old:Destroy() end -- новое уведомление заменяет старое с тем же названием
-        order += 1
+        order = order + 1
         local col = kind == "off" and Color3.fromRGB(239, 68, 68)
             or (kind == "info" and Color3.fromRGB(110, 120, 255) or Color3.fromRGB(80, 220, 120))
         local card = new("Frame", {Size = UDim2.new(1, 0, 0, 54), BackgroundColor3 = X.cardColor or Color3.fromRGB(14, 14, 20),
@@ -3015,7 +3033,7 @@ local function rt(s) return (tostring(s):gsub("&", "&amp;"):gsub("<", "&lt;"):gs
 local function nmOf(pl) if pl == LocalPlayer then return displayName() end return pl.DisplayName end
 local kfOrder, kfCards = 0, {}
 local function kfPush(kName, kRole, vName, vRole)
-    kfOrder += 1
+    kfOrder = kfOrder + 1
     local card = new("Frame", {Size = UDim2.new(1, 0, 0, 30), BackgroundColor3 = Color3.fromRGB(12, 12, 16),
         BackgroundTransparency = 1, BorderSizePixel = 0, LayoutOrder = kfOrder}, kfList)
     corner(8, card)
@@ -3273,7 +3291,6 @@ X.buildNew = function()
                     if not knife then
                         -- ножа нет в руках — модель не видна
                         if km.cur then
-                            local old = nil
                             for _, cont in ipairs({c, LocalPlayer:FindFirstChild("Backpack")}) do
                                 if cont then
                                     for _, tool in ipairs(cont:GetChildren()) do
@@ -3422,7 +3439,7 @@ X.buildNew = function()
             Font = Enum.Font.GothamSemibold, TextXAlignment = Enum.TextXAlignment.Left,
             TextColor3 = C.TEXT, LayoutOrder = msgOrder,
             Text = string.format('<font color="#a5b4fc">"%s"</font> %s',
-                tostring(nick):gsub("<", "&lt;"), tostring(text):gsub("<", "&lt;"))}, msgScroll)
+                (tostring(nick):gsub("<", "&lt;")), (tostring(text):gsub("<", "&lt;")))}, msgScroll)
         task.defer(function()
             msgScroll.CanvasPosition = Vector2.new(0, msgScroll.AbsoluteCanvasSize.Y)
         end)
@@ -3506,9 +3523,6 @@ X.buildNew = function()
             end
         end
     end
-    Players.PlayerChatted:Connect(function(cobj)
-        -- legacy
-    end)
     pcall(function()
         local tcs = game:GetService("TextChatService")
         tcs.MessageReceived:Connect(function(msg)
@@ -3723,7 +3737,8 @@ pcall(function()
                 if (m == "FireServer" or m == "InvokeServer") and typeof(self) == "Instance" then
                     local n = self.Name:lower()
                     if n:find("vote") or n:find("map") then
-                        dupe.cap = {r = self, m = m, a = table.pack(...)}
+                        local packed = {n = select("#", ...), ...}
+                        dupe.cap = {r = self, m = m, a = packed}
                         task.defer(notify, "DupeVote: записан " .. self.Name)
                     end
                 end
@@ -3736,7 +3751,8 @@ pcall(function()
 end)
 
 local function mapArgs(args)
-    local out = table.pack(table.unpack(args, 1, args.n))
+    local out = {n = args.n}
+    for i = 1, args.n do out[i] = args[i] end
     local mapName = MM2_MAPS[dupe.map]
     for i = 1, out.n do
         if type(out[i]) == "string" then
@@ -3784,10 +3800,10 @@ local function doDupeVote()
             for _ = 1, amt do
                 local a = mapArgs(cap.a)
                 if cap.m == "FireServer" then
-                    if pcall(function() cap.r:FireServer(table.unpack(a, 1, a.n)) end) then sent += 1 end
+                    if pcall(function() cap.r:FireServer((table.unpack or unpack)(a, 1, a.n)) end) then sent = sent + 1 end
                 else
-                    task.spawn(function() pcall(function() cap.r:InvokeServer(table.unpack(a, 1, a.n)) end) end)
-                    sent += 1
+                    task.spawn(function() pcall(function() cap.r:InvokeServer((table.unpack or unpack)(a, 1, a.n)) end) end)
+                    sent = sent + 1
                 end
                 task.wait(0.05)
             end
@@ -3799,7 +3815,7 @@ local function doDupeVote()
                 for _, d in ipairs(pg:GetDescendants()) do
                     if d:IsA("GuiButton") and btnMatches(d, mapName) then
                         for _ = 1, amt do
-                            if clickBtn(d) then sent += 1 end
+                            if clickBtn(d) then sent = sent + 1 end
                             task.wait(0.05)
                         end
                         break
@@ -3818,7 +3834,7 @@ local function doDupeVote()
                             else
                                 task.spawn(function() pcall(function() d:InvokeServer(mapName) end) end)
                             end
-                            sent += 1
+                            sent = sent + 1
                             task.wait(0.05)
                         end
                     end
@@ -4097,11 +4113,12 @@ local toggleGui = makeGui("ManewareToggle", 99999)
 local menuVisible = true
 
 local function setMenu(show)
-    menuVisible = show
-    if show then
+    menuVisible = show and true or false
+    if not main then return end
+    if menuVisible then
         main.Visible = true
         main.Size = FULL
-        pcall(function() tw(main, 0.2, {Size = FULL}) end)
+        if hubGui then hubGui.Enabled = true end
     else
         main.Visible = false
     end
@@ -4203,6 +4220,8 @@ local function saveUI()
     writeJson("ui.json", d)
 end
 
+local createBind -- объявляем заранее: X.applyUI ниже вызывает createBind (раньше это была ошибка: глобал nil)
+
 -- для конфигов: сохраняем/загружаем позиции FAB, watermark, killfeed, биндов
 X.collectUI = function()
     local d = {fab = posToTbl(fab.Position), wm = posToTbl(wmRoot.Position), kf = posToTbl(X.kfRoot.Position), binds = {}}
@@ -4239,12 +4258,12 @@ local function bindInfo(name)
     return nil
 end
 
-local function createBind(name, pos)
+createBind = function(name, pos)
     if bindButtons[name] then return false end
     local run, getState = bindInfo(name)
     if not run then return false end
     local n = 0
-    for _ in pairs(bindButtons) do n += 1 end
+    for _ in pairs(bindButtons) do n = n + 1 end
     local btn = new("TextButton", {Size = UDim2.new(0, 70, 0, 42),
         Position = pos or UDim2.new(0.5, -105 + (n % 4) * 76, 0.3, math.floor(n / 4) * 50),
         BackgroundColor3 = C.ELEMENT, Text = name, TextColor3 = C.TEXT, TextScaled = true, Font = Enum.Font.GothamBold,
@@ -4605,4 +4624,16 @@ if not okUI then
     notify("Ошибка UI: " .. tostring(errUI))
 end
 
-print("[Maneware] v11 загружен")
+print("[Maneware] v11.2 загружен")
+-- Принудительно показать меню
+pcall(function()
+    if hubGui then hubGui.Enabled = true end
+    if main then
+        main.Visible = true
+        main.Size = UDim2.new(0.9, 0, 0.85, 0)
+        main.Position = UDim2.new(0.5, 0, 0.5, 0)
+        main.AnchorPoint = Vector2.new(0.5, 0.5)
+    end
+    print("[Maneware] hub parent=", hubGui and hubGui.Parent and tostring(hubGui.Parent))
+    print("[Maneware] main AbsSize=", main and main.AbsoluteSize)
+end)
