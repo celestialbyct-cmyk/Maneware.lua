@@ -4606,7 +4606,3 @@ if not okUI then
 end
 
 print("[Maneware] v11 загружен")
-pcall(function()
-    print("[Maneware] hub parent=", hubGui and hubGui.Parent and hubGui.Parent.Name)
-    print("[Maneware] main size=", main and main.AbsoluteSize)
-end)
