@@ -1,7 +1,7 @@
--- Maneware MM2 v11.5 | Loader с диагностикой (Delta, телефон)
+-- Maneware MM2 v11.6 | Loader с диагностикой (Delta, телефон)
 -- Если меню не появилось, на экране будет красная плашка с текстом ошибки.
 local SRC = [==[-- Maneware MM2 v11 | Mobile (Delta)
--- v11.5: GUI fix for Delta 2.743.1136 (gethui -> CoreGui -> PlayerGui, watchdog, probe)
+-- v11.6: GUI fix for Delta 2.743.1136 (gethui -> CoreGui -> PlayerGui, watchdog, probe)
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local UIS = game:GetService("UserInputService")
@@ -106,14 +106,14 @@ local function tw(o, t, p)
     if ok then tween:Play() return tween end
 end
 local function corner(r, p) return new("UICorner", {CornerRadius = UDim.new(0, r or 8)}, p) end
--- Порядок родителей: gethui -> CoreGui -> PlayerGui
+-- Порядок родителей: PlayerGui -> gethui -> CoreGui (в PlayerGui тач/скролл работают надёжно)
 local function getGuiParents()
     local list = {}
-    pcall(function() if gethui then table.insert(list, gethui()) end end)
-    pcall(function() table.insert(list, game:GetService("CoreGui")) end)
     local pg = LocalPlayer:FindFirstChild("PlayerGui")
     if not pg then pcall(function() pg = LocalPlayer:WaitForChild("PlayerGui", 8) end) end
     if pg then table.insert(list, pg) end
+    pcall(function() if gethui then table.insert(list, gethui()) end end)
+    pcall(function() table.insert(list, game:GetService("CoreGui")) end)
     return list
 end
 local function makeGui(name, order)
@@ -261,7 +261,7 @@ corner(10, closeBtn)
 local dragging, dragInput, dragStart, startPos
 topbar.InputBegan:Connect(function(i)
     if i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.Touch then
-        dragging, dragStart, startPos = true, i.Position, main.Position
+        dragging, dragStart, startPos, dragInput = true, i.Position, main.Position, i
         i.Changed:Connect(function() if i.UserInputState == Enum.UserInputState.End then dragging = false end end)
     end
 end)
@@ -269,7 +269,7 @@ topbar.InputChanged:Connect(function(i)
     if i.UserInputType == Enum.UserInputType.MouseMovement or i.UserInputType == Enum.UserInputType.Touch then dragInput = i end
 end)
 UIS.InputChanged:Connect(function(i)
-    if i == dragInput and dragging then
+    if dragging and (i == dragInput or i.UserInputType == Enum.UserInputType.MouseMovement) then
         local d = i.Position - dragStart
         main.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + d.X, startPos.Y.Scale, startPos.Y.Offset + d.Y)
     end
@@ -2999,7 +2999,7 @@ local kf = {on = false, hideInn = true, hideMur = true, hideShe = true}
 X.kf = kf
 local kfGui = makeGui("ManewareKF", 99994)
 local kfRoot = new("Frame", {Name = "KF", Size = UDim2.new(0, 270, 0, 190), Position = UDim2.new(0, 12, 0.3, 0),
-    BackgroundTransparency = 1, Active = true}, kfGui)
+    BackgroundTransparency = 1, Active = false}, kfGui)
 X.kfRoot = kfRoot
 local kfList = new("Frame", {Size = UDim2.new(1, 0, 1, 0), BackgroundTransparency = 1}, kfRoot)
 new("UIListLayout", {Padding = UDim.new(0, 5), SortOrder = Enum.SortOrder.LayoutOrder,
@@ -3375,6 +3375,10 @@ X.buildNew = function()
         Font = Enum.Font.GothamBold, BorderSizePixel = 0, AutoButtonColor = true}, chatGui)
     corner(14, chatBtn)
     new("UIStroke", {Color = Color3.new(1, 1, 1), Thickness = 1.5}, chatBtn)
+    chatBtn.Visible = false -- пока открыто меню, кнопка чата скрыта (иначе перекрывает сайдбар)
+    X.chatBtnShow = function(v)
+        chatBtn.Visible = v and true or false
+    end
 
     local chatFrame = new("Frame", {Size = UDim2.new(0, 280, 0, 220), Position = UDim2.new(0, 12, 1, -350),
         BackgroundColor3 = Color3.fromRGB(14, 14, 20), BorderSizePixel = 0, Visible = false, Active = true}, chatGui)
@@ -3452,6 +3456,13 @@ X.buildNew = function()
         chatFrame.Visible = not chatFrame.Visible
     end)
     onTap(chatClose, function() chatFrame.Visible = false end)
+    do -- при открытии меню окно чата тоже прячем (оно перекрывало бы сайдбар)
+        local oldShow = X.chatBtnShow
+        X.chatBtnShow = function(v)
+            oldShow(v)
+            if not v then chatFrame.Visible = false end
+        end
+    end
 
     -- drag chat window
     do
@@ -4094,6 +4105,7 @@ local menuVisible = true
 
 local function setMenu(show)
     menuVisible = show and true or false
+    if X.chatBtnShow then pcall(X.chatBtnShow, not menuVisible) end
     if not main then return end
     if menuVisible then
         main.Visible = true
@@ -4159,7 +4171,7 @@ if uiData.kf then pcall(function() X.kfRoot.Position = tblToPos(uiData.kf) end) 
 -- Watermark
 local wmGui = makeGui("ManewareWM", 99996)
 local wmRoot = new("Frame", {Name = "WM", AutomaticSize = Enum.AutomaticSize.XY, Size = UDim2.new(0, 0, 0, 0),
-    BackgroundTransparency = 1, Active = true, Visible = false, AnchorPoint = Vector2.new(0.5, 0),
+    BackgroundTransparency = 1, Active = false, Visible = false, AnchorPoint = Vector2.new(0.5, 0),
     Position = UDim2.new(0.5, 0, 0, 14)}, wmGui)
 if uiData.wm then pcall(function() wmRoot.Position = tblToPos(uiData.wm) end) end
 local wmScale = new("UIScale", {Scale = 1}, wmRoot)
@@ -4305,6 +4317,7 @@ new("TextLabel", {Size = UDim2.new(1, -40, 0, 60), Position = UDim2.new(0, 20, 0
     TextColor3 = C.TEXT, TextSize = 15, Font = Enum.Font.GothamBold, TextWrapped = true}, catcher)
 
 local function editBox(obj, on)
+    if obj == X.kfRoot or obj == wmRoot then obj.Active = on and true or false end -- ловит нажатия только в режиме редактирования
     local b = obj:FindFirstChild("MWEditBox")
     if on and not b then
         b = new("Frame", {Name = "MWEditBox", Size = UDim2.new(1, 8, 1, 8), Position = UDim2.new(0, -4, 0, -4),
@@ -4604,7 +4617,7 @@ if not okUI then
     notify("Ошибка UI: " .. tostring(errUI))
 end
 
-print("[Maneware] v11.5 загружен")
+print("[Maneware] v11.6 загружен")
 -- Принудительно показать меню
 pcall(function()
     if hubGui then hubGui.Enabled = true end
@@ -4672,18 +4685,18 @@ local function status(text, kind, ttl)
     end
 end
 
-status("Maneware v11.5 (build 5): компиляция…", "info", 3)
+status("Maneware v11.6 (build 6): компиляция…", "info", 3)
 local fn, cerr = loadstring(SRC, "=Maneware")
 if not fn then
-    status("[v11.5, wrap=ON] ОШИБКА КОМПИЛЯЦИИ:\n" .. tostring(cerr), "err")
+    status("[v11.6, wrap=ON] ОШИБКА КОМПИЛЯЦИИ:\n" .. tostring(cerr), "err")
     warn("[Maneware] compile error: " .. tostring(cerr))
     return
 end
-status("Maneware v11.5: запуск…", "info", 3)
+status("Maneware v11.6: запуск…", "info", 3)
 local ok, err = xpcall(fn, function(e) return tostring(e) .. "\n" .. tostring(debug.traceback()) end)
 if not ok then
-    status("[v11.5] ОШИБКА ЗАПУСКА:\n" .. tostring(err), "err")
+    status("[v11.6] ОШИБКА ЗАПУСКА:\n" .. tostring(err), "err")
     warn("[Maneware] runtime error: " .. tostring(err))
 else
-    status("Maneware v11.5 загружен ✔  (кнопка меню справа)", "ok", 5)
+    status("Maneware v11.6 загружен ✔  (кнопка меню справа)", "ok", 5)
 end
