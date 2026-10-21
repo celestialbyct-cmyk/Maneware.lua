@@ -1,7 +1,7 @@
--- Maneware MM2 v11.3 | Loader с диагностикой (Delta, телефон)
+-- Maneware MM2 v11.4 | Loader с диагностикой (Delta, телефон)
 -- Если меню не появилось, на экране будет красная плашка с текстом ошибки.
 local SRC = [==[-- Maneware MM2 v11 | Mobile (Delta)
--- v11.3: GUI fix for Delta 2.743.1136 (gethui -> CoreGui -> PlayerGui, watchdog, probe)
+-- v11.4: GUI fix for Delta 2.743.1136 (gethui -> CoreGui -> PlayerGui, watchdog, probe)
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local UIS = game:GetService("UserInputService")
@@ -2818,7 +2818,7 @@ end)
 --------------------------------------------------
 -- v10: NameProtect+, GunModel, KillFeed, JumpCircle
 --------------------------------------------------
-do
+;(function() -- своя функция = свой лимит 200 локальных переменных
 local CoreGui = nil
 pcall(function() CoreGui = game:GetService("CoreGui") end)
 
@@ -3519,7 +3519,7 @@ X.buildNew = function()
 
     chatAdd("System", "Чат Maneware готов. Пиши снизу.")
 end
-end -- v10/v11 блок
+end)() -- v10/v11 блок
 
 local function buildUI()
 --------------------------------------------------
@@ -4604,7 +4604,7 @@ if not okUI then
     notify("Ошибка UI: " .. tostring(errUI))
 end
 
-print("[Maneware] v11.3 загружен")
+print("[Maneware] v11.4 загружен")
 -- Принудительно показать меню
 pcall(function()
     if hubGui then hubGui.Enabled = true end
