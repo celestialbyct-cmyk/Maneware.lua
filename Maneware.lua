@@ -1,7 +1,7 @@
--- Maneware MM2 v11.6 | Loader с диагностикой (Delta, телефон)
+-- Maneware MM2 v11.7 | Loader с диагностикой (Delta, телефон)
 -- Если меню не появилось, на экране будет красная плашка с текстом ошибки.
 local SRC = [==[-- Maneware MM2 v11 | Mobile (Delta)
--- v11.6: GUI fix for Delta 2.743.1136 (gethui -> CoreGui -> PlayerGui, watchdog, probe)
+-- v11.7: GUI fix for Delta 2.743.1136 (gethui -> CoreGui -> PlayerGui, watchdog, probe)
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local UIS = game:GetService("UserInputService")
@@ -299,11 +299,10 @@ local function addTab(name, icon, order)
     local page = new("ScrollingFrame", {Size = UDim2.new(1, -16, 1, -16), Position = UDim2.new(0, 8, 0, 8),
         BackgroundTransparency = 1, BorderSizePixel = 0, Visible = false, ScrollBarThickness = 4,
         ScrollBarImageColor3 = C.ACCENT, CanvasSize = UDim2.new(0, 0, 0, 0), Active = true,
-        ScrollingDirection = Enum.ScrollingDirection.Y}, content)
+        AutomaticCanvasSize = Enum.AutomaticSize.Y, ScrollingDirection = Enum.ScrollingDirection.Y}, content)
+    new("UIPadding", {PaddingBottom = UDim.new(0, 24)}, page)
     local layout = new("UIListLayout", {Padding = UDim.new(0, 8), SortOrder = Enum.SortOrder.LayoutOrder}, page)
-    layout:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(function()
-        page.CanvasSize = UDim2.new(0, 0, 0, layout.AbsoluteContentSize.Y + 20)
-    end)
+    -- высоту прокрутки считает AutomaticCanvasSize (ручной расчёт ломался из-за UIScale: список обрезался)
 
     local btn = new("TextButton", {Size = UDim2.new(1, 0, 0, 44), BackgroundColor3 = C.ELEMENT,
         BackgroundTransparency = 1, Text = "", AutoButtonColor = false, BorderSizePixel = 0, LayoutOrder = order or idx}, sidebar)
@@ -4617,7 +4616,7 @@ if not okUI then
     notify("Ошибка UI: " .. tostring(errUI))
 end
 
-print("[Maneware] v11.6 загружен")
+print("[Maneware] v11.7 загружен")
 -- Принудительно показать меню
 pcall(function()
     if hubGui then hubGui.Enabled = true end
@@ -4685,18 +4684,18 @@ local function status(text, kind, ttl)
     end
 end
 
-status("Maneware v11.6 (build 6): компиляция…", "info", 3)
+status("Maneware v11.7 (build 7): компиляция…", "info", 3)
 local fn, cerr = loadstring(SRC, "=Maneware")
 if not fn then
-    status("[v11.6, wrap=ON] ОШИБКА КОМПИЛЯЦИИ:\n" .. tostring(cerr), "err")
+    status("[v11.7, wrap=ON] ОШИБКА КОМПИЛЯЦИИ:\n" .. tostring(cerr), "err")
     warn("[Maneware] compile error: " .. tostring(cerr))
     return
 end
-status("Maneware v11.6: запуск…", "info", 3)
+status("Maneware v11.7: запуск…", "info", 3)
 local ok, err = xpcall(fn, function(e) return tostring(e) .. "\n" .. tostring(debug.traceback()) end)
 if not ok then
-    status("[v11.6] ОШИБКА ЗАПУСКА:\n" .. tostring(err), "err")
+    status("[v11.7] ОШИБКА ЗАПУСКА:\n" .. tostring(err), "err")
     warn("[Maneware] runtime error: " .. tostring(err))
 else
-    status("Maneware v11.6 загружен ✔  (кнопка меню справа)", "ok", 5)
+    status("Maneware v11.7 загружен ✔  (кнопка меню справа)", "ok", 5)
 end
