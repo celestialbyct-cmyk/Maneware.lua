@@ -1,7 +1,7 @@
--- Maneware MM2 v11.4 | Loader с диагностикой (Delta, телефон)
+-- Maneware MM2 v11.5 | Loader с диагностикой (Delta, телефон)
 -- Если меню не появилось, на экране будет красная плашка с текстом ошибки.
 local SRC = [==[-- Maneware MM2 v11 | Mobile (Delta)
--- v11.4: GUI fix for Delta 2.743.1136 (gethui -> CoreGui -> PlayerGui, watchdog, probe)
+-- v11.5: GUI fix for Delta 2.743.1136 (gethui -> CoreGui -> PlayerGui, watchdog, probe)
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local UIS = game:GetService("UserInputService")
@@ -4604,7 +4604,7 @@ if not okUI then
     notify("Ошибка UI: " .. tostring(errUI))
 end
 
-print("[Maneware] v11.4 загружен")
+print("[Maneware] v11.5 загружен")
 -- Принудительно показать меню
 pcall(function()
     if hubGui then hubGui.Enabled = true end
@@ -4672,18 +4672,18 @@ local function status(text, kind, ttl)
     end
 end
 
-status("Maneware: компиляция…", "info", 3)
+status("Maneware v11.5 (build 5): компиляция…", "info", 3)
 local fn, cerr = loadstring(SRC, "=Maneware")
 if not fn then
-    status("ОШИБКА КОМПИЛЯЦИИ:\n" .. tostring(cerr), "err")
+    status("[v11.5, wrap=ON] ОШИБКА КОМПИЛЯЦИИ:\n" .. tostring(cerr), "err")
     warn("[Maneware] compile error: " .. tostring(cerr))
     return
 end
-status("Maneware: запуск…", "info", 3)
+status("Maneware v11.5: запуск…", "info", 3)
 local ok, err = xpcall(fn, function(e) return tostring(e) .. "\n" .. tostring(debug.traceback()) end)
 if not ok then
-    status("ОШИБКА ЗАПУСКА:\n" .. tostring(err), "err")
+    status("[v11.5] ОШИБКА ЗАПУСКА:\n" .. tostring(err), "err")
     warn("[Maneware] runtime error: " .. tostring(err))
 else
-    status("Maneware загружен ✔  (кнопка меню справа)", "ok", 5)
+    status("Maneware v11.5 загружен ✔  (кнопка меню справа)", "ok", 5)
 end
