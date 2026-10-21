@@ -1,27 +1,7 @@
--- Probe: плашка на 5 секунд, показывает что скрипт вообще компилируется и запускается
-pcall(function()
-    local g = Instance.new("ScreenGui")
-    g.Name = "MWProbe"
-    g.ResetOnSpawn = false
-    g.DisplayOrder = 2147483647
-    local l = Instance.new("TextLabel")
-    l.Size = UDim2.new(0, 240, 0, 36)
-    l.Position = UDim2.new(0.5, -120, 0, 40)
-    l.BackgroundColor3 = Color3.fromRGB(99, 102, 241)
-    l.TextColor3 = Color3.new(1, 1, 1)
-    l.TextSize = 16
-    l.Font = Enum.Font.GothamBold
-    l.Text = "Maneware: скрипт запущен"
-    l.Parent = g
-    local ok = pcall(function() g.Parent = (gethui and gethui()) or game:GetService("CoreGui") end)
-    if not ok or not g.Parent then
-        g.Parent = game:GetService("Players").LocalPlayer:WaitForChild("PlayerGui")
-    end
-    task.delay(5, function() g:Destroy() end)
-end)
-
--- Maneware MM2 v11 | Mobile (Delta)
--- v11.2: GUI fix for Delta 2.743.1136 (gethui -> CoreGui -> PlayerGui, watchdog, probe)
+-- Maneware MM2 v11.3 | Loader с диагностикой (Delta, телефон)
+-- Если меню не появилось, на экране будет красная плашка с текстом ошибки.
+local SRC = [==[-- Maneware MM2 v11 | Mobile (Delta)
+-- v11.3: GUI fix for Delta 2.743.1136 (gethui -> CoreGui -> PlayerGui, watchdog, probe)
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local UIS = game:GetService("UserInputService")
@@ -4624,4 +4604,86 @@ if not okUI then
     notify("Ошибка UI: " .. tostring(errUI))
 end
 
-print("[Maneware] v11.2 загружен")
+print("[Maneware] v11.3 загружен")
+-- Принудительно показать меню
+pcall(function()
+    if hubGui then hubGui.Enabled = true end
+    if main then
+        main.Visible = true
+        main.Size = UDim2.new(0.9, 0, 0.85, 0)
+        main.Position = UDim2.new(0.5, 0, 0.5, 0)
+        main.AnchorPoint = Vector2.new(0.5, 0.5)
+    end
+    print("[Maneware] hub parent=", hubGui and hubGui.Parent and tostring(hubGui.Parent))
+    print("[Maneware] main AbsSize=", main and main.AbsoluteSize)
+end)
+]==]
+
+local Players = game:GetService("Players")
+local LP = Players.LocalPlayer
+local statusGuis = {}
+
+local function parents()
+    local list = {}
+    pcall(function() if gethui then table.insert(list, gethui()) end end)
+    pcall(function() table.insert(list, game:GetService("CoreGui")) end)
+    local pg = LP:FindFirstChild("PlayerGui")
+    if not pg then pcall(function() pg = LP:WaitForChild("PlayerGui", 8) end) end
+    if pg then table.insert(list, pg) end
+    return list
+end
+
+-- плашка статуса рисуется сразу в каждом доступном родителе (где-то да покажется)
+local function status(text, kind, ttl)
+    for _, g in ipairs(statusGuis) do pcall(function() g:Destroy() end) end
+    statusGuis = {}
+    local col = kind == "err" and Color3.fromRGB(170, 30, 40)
+        or (kind == "ok" and Color3.fromRGB(30, 140, 70) or Color3.fromRGB(70, 80, 200))
+    for _, p in ipairs(parents()) do
+        pcall(function()
+            local g = Instance.new("ScreenGui")
+            g.Name = "ManewareStatus"
+            g.ResetOnSpawn = false
+            g.IgnoreGuiInset = true
+            g.DisplayOrder = 2147483647
+            local b = Instance.new("TextButton")
+            b.AnchorPoint = Vector2.new(0.5, 0)
+            b.Position = UDim2.new(0.5, 0, 0, 30)
+            b.Size = UDim2.new(0.92, 0, 0, kind == "err" and 260 or 44)
+            b.BackgroundColor3 = col
+            b.TextColor3 = Color3.new(1, 1, 1)
+            b.TextSize = kind == "err" and 14 or 16
+            b.Font = Enum.Font.GothamBold
+            b.TextWrapped = true
+            b.TextXAlignment = Enum.TextXAlignment.Left
+            b.TextYAlignment = Enum.TextYAlignment.Top
+            b.AutoButtonColor = false
+            b.Text = text .. (kind == "err" and "\n\n(тап — скопировать и закрыть)" or "")
+            b.Parent = g
+            b.Activated:Connect(function()
+                if kind == "err" and setclipboard then pcall(setclipboard, text) end
+                g:Destroy()
+            end)
+            pcall(function() if syn and syn.protect_gui then syn.protect_gui(g) end end)
+            g.Parent = p
+            table.insert(statusGuis, g)
+            if ttl then task.delay(ttl, function() pcall(function() g:Destroy() end) end) end
+        end)
+    end
+end
+
+status("Maneware: компиляция…", "info", 3)
+local fn, cerr = loadstring(SRC, "=Maneware")
+if not fn then
+    status("ОШИБКА КОМПИЛЯЦИИ:\n" .. tostring(cerr), "err")
+    warn("[Maneware] compile error: " .. tostring(cerr))
+    return
+end
+status("Maneware: запуск…", "info", 3)
+local ok, err = xpcall(fn, function(e) return tostring(e) .. "\n" .. tostring(debug.traceback()) end)
+if not ok then
+    status("ОШИБКА ЗАПУСКА:\n" .. tostring(err), "err")
+    warn("[Maneware] runtime error: " .. tostring(err))
+else
+    status("Maneware загружен ✔  (кнопка меню справа)", "ok", 5)
+end
