@@ -1,7 +1,7 @@
--- Maneware MM2 v11.7 | Loader с диагностикой (Delta, телефон)
+-- Maneware MM2 v11.8 | Loader с диагностикой (Delta, телефон)
 -- Если меню не появилось, на экране будет красная плашка с текстом ошибки.
 local SRC = [==[-- Maneware MM2 v11 | Mobile (Delta)
--- v11.7: GUI fix for Delta 2.743.1136 (gethui -> CoreGui -> PlayerGui, watchdog, probe)
+-- v11.8: GUI fix for Delta 2.743.1136 (gethui -> CoreGui -> PlayerGui, watchdog, probe)
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local UIS = game:GetService("UserInputService")
@@ -202,10 +202,7 @@ local main = new("Frame", {Size = FULL, Position = UDim2.new(0.5, 0, 0.5, 0),
 corner(14, main)
 new("UIStroke", {Color = C.BORDER, Thickness = 2}, main)
 -- лёгкий pop-in без обнуления размера
-pcall(function()
-    main.Size = UDim2.new(0.85, 0, 0.8, 0)
-    tw(main, 0.25, {Size = FULL})
-end)
+-- pop-in убран: он мешал смене размера интерфейса
 -- страховка: через 0.5с принудительно показать
 task.delay(0.5, function()
     if main and main.Parent then
@@ -216,25 +213,33 @@ task.delay(0.5, function()
     end
 end)
 
--- UIScale под телефон (Delta Android)
-do
-    local sc = Instance.new("UIScale")
-    sc.Name = "MWScale"
-    sc.Parent = main
-    local function upd()
-        local cam = workspace.CurrentCamera
-        if not cam then return end
-        local vs = cam.ViewportSize
-        if vs.X < 10 then return end
-        -- на узких экранах чуть уменьшаем
-        local s = math.clamp(math.min(vs.X / 420, vs.Y / 750), 0.65, 1)
+-- Масштаб интерфейса: окно всегда занимает 90%x85% экрана, масштаб увеличивает ЭЛЕМЕНТЫ внутри.
+-- (раньше UIScale 0.65 уменьшал и окно, и элементы, а прокрутка обрезалась)
+local guiScale = 1
+pcall(function()
+    local saved = readJson("gui.json")
+    if saved and tonumber(saved.scale) then guiScale = math.clamp(tonumber(saved.scale), 0.8, 1.5) end
+end)
+local function setGuiScale(s)
+    s = math.clamp(tonumber(s) or 1, 0.8, 1.5)
+    s = math.floor(s * 10 + 0.5) / 10
+    guiScale = s
+    local sc = main:FindFirstChild("MWScale")
+    if math.abs(s - 1) < 0.01 then
+        if sc then sc:Destroy() end -- при масштабе 1 UIScale вообще не нужен
+    else
+        if not sc then
+            sc = Instance.new("UIScale")
+            sc.Name = "MWScale"
+            sc.Parent = main
+        end
         sc.Scale = s
     end
-    upd()
-    pcall(function()
-        workspace.CurrentCamera:GetPropertyChangedSignal("ViewportSize"):Connect(upd)
-    end)
+    FULL = UDim2.new(0.9 / s, 0, 0.85 / s, 0)
+    main.Size = FULL
+    pcall(function() writeJson("gui.json", {scale = s}) end)
 end
+setGuiScale(guiScale)
 
 
 -- Emergency show (до тяжёлого buildUI)
@@ -300,7 +305,7 @@ local function addTab(name, icon, order)
         BackgroundTransparency = 1, BorderSizePixel = 0, Visible = false, ScrollBarThickness = 4,
         ScrollBarImageColor3 = C.ACCENT, CanvasSize = UDim2.new(0, 0, 0, 0), Active = true,
         AutomaticCanvasSize = Enum.AutomaticSize.Y, ScrollingDirection = Enum.ScrollingDirection.Y}, content)
-    new("UIPadding", {PaddingBottom = UDim.new(0, 24)}, page)
+    new("UIPadding", {PaddingBottom = UDim.new(0, 60)}, page)
     local layout = new("UIListLayout", {Padding = UDim.new(0, 8), SortOrder = Enum.SortOrder.LayoutOrder}, page)
     -- высоту прокрутки считает AutomaticCanvasSize (ручной расчёт ломался из-за UIScale: список обрезался)
 
@@ -3962,6 +3967,15 @@ t15.Toggle("Assist: Visible Check", true, function(v) assist.visible = v end, IC
 
 -- HUD: Notify / SoundNotify / Gradients
 local t16 = addTab("HUD", ICONS.UTIL)
+t16.Section("🔍 Размер интерфейса")
+t16.Button("➕ GUI больше", function()
+    setGuiScale(guiScale + 0.1)
+    notify("GUI: размер x" .. guiScale)
+end)
+t16.Button("➖ GUI меньше", function()
+    setGuiScale(guiScale - 0.1)
+    notify("GUI: размер x" .. guiScale)
+end)
 t16.Section("🔔 Notify (карточки как в Celestial)")
 t16.Toggle("Notify", true, function(v) nf.on = v end, ICONS.UTIL)
 t16.Section("🔊 SoundNotify")
@@ -4616,13 +4630,13 @@ if not okUI then
     notify("Ошибка UI: " .. tostring(errUI))
 end
 
-print("[Maneware] v11.7 загружен")
+print("[Maneware] v11.8 загружен")
 -- Принудительно показать меню
 pcall(function()
     if hubGui then hubGui.Enabled = true end
     if main then
         main.Visible = true
-        main.Size = UDim2.new(0.9, 0, 0.85, 0)
+        main.Size = FULL
         main.Position = UDim2.new(0.5, 0, 0.5, 0)
         main.AnchorPoint = Vector2.new(0.5, 0.5)
     end
@@ -4684,18 +4698,18 @@ local function status(text, kind, ttl)
     end
 end
 
-status("Maneware v11.7 (build 7): компиляция…", "info", 3)
+status("Maneware v11.8 (build 8): компиляция…", "info", 3)
 local fn, cerr = loadstring(SRC, "=Maneware")
 if not fn then
-    status("[v11.7, wrap=ON] ОШИБКА КОМПИЛЯЦИИ:\n" .. tostring(cerr), "err")
+    status("[v11.8, wrap=ON] ОШИБКА КОМПИЛЯЦИИ:\n" .. tostring(cerr), "err")
     warn("[Maneware] compile error: " .. tostring(cerr))
     return
 end
-status("Maneware v11.7: запуск…", "info", 3)
+status("Maneware v11.8: запуск…", "info", 3)
 local ok, err = xpcall(fn, function(e) return tostring(e) .. "\n" .. tostring(debug.traceback()) end)
 if not ok then
-    status("[v11.7] ОШИБКА ЗАПУСКА:\n" .. tostring(err), "err")
+    status("[v11.8] ОШИБКА ЗАПУСКА:\n" .. tostring(err), "err")
     warn("[Maneware] runtime error: " .. tostring(err))
 else
-    status("Maneware v11.7 загружен ✔  (кнопка меню справа)", "ok", 5)
+    status("Maneware v11.8 загружен ✔  (кнопка меню справа)", "ok", 5)
 end
