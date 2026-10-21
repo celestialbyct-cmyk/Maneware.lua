@@ -1,7 +1,7 @@
--- Maneware MM2 v11.8 | Loader с диагностикой (Delta, телефон)
+-- Maneware MM2 v11.9 | Loader с диагностикой (Delta, телефон)
 -- Если меню не появилось, на экране будет красная плашка с текстом ошибки.
 local SRC = [==[-- Maneware MM2 v11 | Mobile (Delta)
--- v11.8: GUI fix for Delta 2.743.1136 (gethui -> CoreGui -> PlayerGui, watchdog, probe)
+-- v11.9: GUI fix for Delta 2.743.1136 (gethui -> CoreGui -> PlayerGui, watchdog, probe)
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local UIS = game:GetService("UserInputService")
@@ -1616,7 +1616,7 @@ end)
 --------------------------------------------------
 -- AUTOFARM МОНЕТ / CANDY (Halloween 2026)
 --------------------------------------------------
-local farm = {on = false, height = 3, speed = 30, limit = 40, flingMurd = false, reset = false, walls = true,
+local farm = {on = false, height = 0, speed = 30, limit = 40, flingMurd = false, reset = false, walls = true,
     safe = 0, count = 0, done = false, sessionCoins = 0, waitGame = true, startTime = 0, anchored = false}
 do -- блок autofarm (локальные переменные живут только тут)
 local coinSkip = setmetatable({}, {__mode = "k"})
@@ -1633,6 +1633,11 @@ local function findCoinContainer()
     for _, n in ipairs(names) do
         local f = workspace:FindFirstChild(n, true)
         if f then cachedCC = f return f end
+    end
+    local cs = workspace:FindFirstChild("Coin_Server", true) -- конфеты/монеты MM2 лежат как Coin_Server
+    if cs and cs.Parent then
+        cachedCC = cs.Parent
+        return cs.Parent
     end
     -- fallback: любая папка с «candy»/«coin» в имени и детьми-партами
     for _, d in ipairs(workspace:GetDescendants()) do
@@ -1698,12 +1703,27 @@ local function readBag()
     return ok and n or nil
 end
 
--- снимаем заморозку персонажа (во время полёта к монете он Anchored, чтобы не проваливаться в пол)
+-- Удержание в воздухе: BodyVelocity вместо Anchored. Anchored-персонаж не вызывает Touched,
+-- поэтому сервер раньше не засчитывал конфеты.
+local function holdOn()
+    local h = myHrp()
+    if not h then return end
+    h.Anchored = false
+    if not h:FindFirstChild("MWFarmHold") then
+        local bv = Instance.new("BodyVelocity")
+        bv.Name = "MWFarmHold"
+        bv.MaxForce = Vector3.new(1e9, 1e9, 1e9)
+        bv.Velocity = Vector3.zero
+        bv.Parent = h
+    end
+end
 farm.release = function()
-    if farm.anchored then
-        farm.anchored = false
-        local h = myHrp()
-        if h then h.Anchored = false end
+    farm.anchored = false
+    local h = myHrp()
+    if h then
+        local bv = h:FindFirstChild("MWFarmHold")
+        if bv then bv:Destroy() end
+        h.Anchored = false
     end
 end
 
@@ -1712,7 +1732,7 @@ local function flyTo(part, coin)
     local h0 = myHrp()
     if not h0 then return false end
     farm.anchored = true
-    h0.Anchored = true -- без этого с NoClip гравитация тянет вниз сквозь пол
+    holdOn() -- без удержания с NoClip гравитация тянет вниз сквозь пол
     local spd = math.clamp(tonumber(farm.speed) or 30, 8, 80)
     local limit = (part.Position - h0.Position).Magnitude / spd + 4
     local t0 = os.clock()
@@ -1743,13 +1763,14 @@ local function flyTo(part, coin)
 end
 
 local function farmLimitReached()
-    farm.release()
-    farm.done = true
+    farm.done = true -- остаёмся висеть на месте, пока не начнётся новый раунд
     if farm.flingMurd then
+        farm.release()
         local m = findByRole("Murderer", true)
         if m then flingPlayer(m) end
     end
     if farm.reset then
+        farm.release()
         local h = myHum()
         if h then
             h.Health = 0
@@ -1785,10 +1806,7 @@ task.spawn(function()
                 if farm.done then return end -- после лимита + ресета стоим и ждём новую игру
                 local my, hum = myHrp(), myHum()
                 if not my or not hum or hum.Health <= 0 then return end
-                if farm.count > 0 then
-                    local bag = readBag()
-                    if bag then farm.count = bag end
-                end
+                -- счёт ведём сами: путь к мешку в интерфейсе менялся с обновлениями и давал неверное число
                 if farm.count >= farm.limit then
                     farmLimitReached()
                     return
@@ -1806,10 +1824,19 @@ task.spawn(function()
                         h.CFrame = CFrame.new(part.Position + Vector3.new(0, farm.height, 0)) * h.CFrame.Rotation
                         h.AssemblyLinearVelocity = Vector3.zero
                         if firetouchinterest then
-                            pcall(function()
-                                firetouchinterest(h, part, 0)
-                                firetouchinterest(h, part, 1)
-                            end)
+                            local ti = coin:FindFirstChildWhichIsA("TouchInterest", true)
+                            local tpart = (ti and ti.Parent and ti.Parent:IsA("BasePart")) and ti.Parent or part
+                            local chr = myChar()
+                            if chr then
+                                for _, limb in ipairs(chr:GetChildren()) do
+                                    if limb:IsA("BasePart") then
+                                        pcall(function()
+                                            firetouchinterest(limb, tpart, 0)
+                                            firetouchinterest(limb, tpart, 1)
+                                        end)
+                                    end
+                                end
+                            end
                         end
                         if coinGone(coin, hadTouch) then got = true break end
                         task.wait(0.06)
@@ -1825,7 +1852,8 @@ task.spawn(function()
                 end
             end)
             if not ok then warn("[Maneware] autofarm: " .. tostring(err)) end
-            if farm.anchored and (not farm.on or not moved) then farm.release() end
+            if farm.anchored and (not farm.on or not isGameActive()) then farm.release() end
+            if farm.on and not isGameActive() and noclipEnabled and not (noclipUser or flyEnabled) then toggleNoclip(false) end
             farmBusy = false
         end
     end
@@ -1894,7 +1922,9 @@ end
 --------------------------------------------------
 -- KILL EFFECTS: эффекты, когда умирает убийца / шериф
 --------------------------------------------------
-local fx = {ghost = false, lightning = false, star = false, starCount = 5, starSpeed = 2}
+local fx = {ghost = false, lightning = false, star = false, starCount = 5, starSpeed = 2,
+    starSize = 1, starHue = 48, starStyle = 2, starRainbow = false, starGlow = true,
+    styleNames = {"4 луча (искра)", "5 лучей (звезда)", "6 лучей", "8 лучей"}}
 local fxDeath
 do -- блок эффектов
 
@@ -1999,24 +2029,64 @@ local function spawnLightning(pos)
     end)
 end
 
--- 3) Star: звёзды выходят из тела, медленно идут вверх и исчезают
+-- 3) Star: кастомные неоновые звёзды (форма, размер, цвет, свечение - во вкладке KillEffect)
+local function starSegments(style)
+    local segs = {}
+    if style == 1 then
+        segs = {{0, -1, 0, 1}, {-1, 0, 1, 0}, {-0.6, -0.6, 0.6, 0.6}, {-0.6, 0.6, 0.6, -0.6}}
+    elseif style == 2 then -- пентаграмма
+        local pts = {}
+        for k = 0, 4 do
+            local a = math.rad(90 + k * 72)
+            pts[k + 1] = {math.cos(a), math.sin(a)}
+        end
+        for k = 0, 4 do
+            local p1, p2 = pts[k + 1], pts[((k + 2) % 5) + 1]
+            segs[#segs + 1] = {p1[1], p1[2], p2[1], p2[2]}
+        end
+    else
+        local n = (style == 3) and 3 or 4
+        for k = 0, n - 1 do
+            local a = math.rad(90 + k * 180 / n)
+            segs[#segs + 1] = {-math.cos(a), -math.sin(a), math.cos(a), math.sin(a)}
+        end
+    end
+    return segs
+end
+
 local function spawnStars(pos)
     local spd = math.clamp(fx.starSpeed, 1, 5)
     local dur = 6 / spd + 0.5
     for _ = 1, fx.starCount do
         task.delay(math.random() * 0.6, function()
             local start = pos + Vector3.new((math.random() - 0.5) * 2.5, math.random() * 2 - 0.5, (math.random() - 0.5) * 2.5)
-            -- Кастомная 3D-звезда (не emoji): 4 клина Neon
             local folder = new("Folder", {Name = "MWStar"}, workspace)
-            local col = Color3.fromRGB(255, 220, 60)
-            local arms = {}
-            for i = 1, 4 do
-                local a = new("Part", {Anchored = true, CanCollide = false, CanTouch = false, CanQuery = false,
-                    CastShadow = false, Material = Enum.Material.Neon, Color = col,
-                    Size = Vector3.new(0.18, 0.18, 1.1), Transparency = 0.1}, folder)
-                arms[i] = a
+            local size = math.clamp(fx.starSize or 1, 0.3, 4)
+            local R = 1.1 * size
+            local th = 0.12 * size
+            local hue0 = ((fx.starHue or 48) % 360) / 360
+            local function colAt(a)
+                if fx.starRainbow then return Color3.fromHSV((hue0 + a) % 1, 0.9, 1) end
+                return Color3.fromHSV(hue0, 0.85, 1)
+            end
+            local segs = starSegments(fx.starStyle or 2)
+            local parts = {}
+            for i, sg in ipairs(segs) do
+                local len = math.sqrt((sg[3] - sg[1]) ^ 2 + (sg[4] - sg[2]) ^ 2) * R
+                parts[i] = new("Part", {Anchored = true, CanCollide = false, CanTouch = false, CanQuery = false,
+                    CastShadow = false, Material = Enum.Material.Neon, Color = colAt(0),
+                    Size = Vector3.new(th, th, math.max(len, 0.1)), Transparency = 0.05}, folder)
+            end
+            local core = new("Part", {Shape = Enum.PartType.Ball, Size = Vector3.new(th * 2.2, th * 2.2, th * 2.2),
+                Anchored = true, CanCollide = false, CanTouch = false, CanQuery = false, CastShadow = false,
+                Material = Enum.Material.Neon, Color = colAt(0)}, folder)
+            local light
+            if fx.starGlow ~= false then
+                light = new("PointLight", {Brightness = 2, Range = 7 * size, Color = colAt(0)}, core)
             end
             local t0 = os.clock()
+            local rotSpd = 1.5 + math.random() * 1.5
+            local rot0 = math.random() * math.pi * 2
             local conn
             conn = RunService.Heartbeat:Connect(function()
                 local a = (os.clock() - t0) / dur
@@ -2025,13 +2095,23 @@ local function spawnStars(pos)
                     folder:Destroy()
                     return
                 end
-                local p = start + Vector3.new((math.random() - 0.5) * 0.02, 9 * a, (math.random() - 0.5) * 0.02)
-                local rot = a * math.pi * 2
-                local tr = 0.1 + 0.9 * a * a
-                for i, arm in ipairs(arms) do
-                    local ang = rot + (i - 1) * (math.pi / 2)
-                    arm.CFrame = CFrame.new(p) * CFrame.Angles(0, ang, math.rad(35))
-                    arm.Transparency = tr
+                local p = start + Vector3.new(math.sin(a * 8) * 0.25, 9 * a, math.cos(a * 8) * 0.25)
+                local base = CFrame.new(p) * CFrame.Angles(0, rot0 + a * rotSpd * math.pi, 0)
+                local tr = 0.05 + 0.95 * a * a * a
+                local col = colAt(a)
+                for i, sg in ipairs(segs) do
+                    local c = base * Vector3.new((sg[1] + sg[3]) / 2 * R, (sg[2] + sg[4]) / 2 * R, 0)
+                    local dir = base:VectorToWorldSpace(Vector3.new(sg[3] - sg[1], sg[4] - sg[2], 0))
+                    parts[i].CFrame = CFrame.lookAt(c, c + dir)
+                    parts[i].Transparency = tr
+                    parts[i].Color = col
+                end
+                core.Position = p
+                core.Transparency = tr
+                core.Color = col
+                if light then
+                    light.Color = col
+                    light.Brightness = 2 * (1 - a)
                 end
             end)
         end)
@@ -3178,7 +3258,7 @@ X.buildNew = function()
     ----------------------------------------------------------------
     -- KNIFEMODEL: butterfly / karambit / nether (только поиск, на нож)
     ----------------------------------------------------------------
-    local km = {on = false, sel = 1, size = 1, rot = 0, busy = false, fail = 0, cur = nil}
+    local km = {on = false, sel = 1, size = 1, rx = 0, ry = 0, rz = 0, busy = false, fail = 0, cur = nil}
     local KM_SLOTS = {
         {key = "km_bf1", label = "Butterfly", q = "csgo butterfly knife"},
         {key = "km_bf2", label = "Butterfly #2", q = "butterfly knife csgo"},
@@ -3239,7 +3319,7 @@ X.buildNew = function()
                 local primary = m.PrimaryPart or parts[1]
                 if not primary then return end
                 m.Parent = knife
-                m:PivotTo(handle.CFrame * CFrame.Angles(0, math.rad(km.rot), 0))
+                m:PivotTo(handle.CFrame * CFrame.Angles(math.rad(km.rx), math.rad(km.ry), math.rad(km.rz)))
                 for _, pt in ipairs(parts) do
                     if pt ~= primary then
                         local w = Instance.new("WeldConstraint")
@@ -3287,7 +3367,7 @@ X.buildNew = function()
                         end
                         return
                     end
-                    local key = km.sel .. "|" .. km.size .. "|" .. km.rot
+                    local key = km.sel .. "|" .. km.size .. "|" .. km.rx .. "|" .. km.ry .. "|" .. km.rz
                     if knife:FindFirstChild("MWKnifeModel") and km.cur == key then return end
                     if os.clock() - km.fail < 6 then return end
                     kmClearAll()
@@ -3306,7 +3386,9 @@ X.buildNew = function()
         if not v then pcall(kmClearAll) end
     end, ICONS.AIM, kLabs, 1, function(i) km.sel = i km.fail = 0 end)
     tk.Slider("KnifeModel: Size", 0.10, 10, 1, "x", function(v) km.size = v end, 0.05)
-    tk.Slider("KnifeModel: Rotate", 0, 360, 0, "°", function(v) km.rot = v end, 90)
+    tk.Slider("KnifeModel: Rotate X", 0, 360, 0, "°", function(v) km.rx = v end, 5)
+    tk.Slider("KnifeModel: Rotate Y", 0, 360, 0, "°", function(v) km.ry = v end, 5)
+    tk.Slider("KnifeModel: Rotate Z", 0, 360, 0, "°", function(v) km.rz = v end, 5)
     local kBox = tk.TextBox("ID модели ножа вручную")
     tk.Button("✔ Применить ID к KnifeModel", function()
         local id = tonumber(kBox.Text)
@@ -3318,6 +3400,79 @@ X.buildNew = function()
         km.cur = nil
         notify("KnifeModel ID: " .. id)
     end)
+
+    ----------------------------------------------------------------
+    -- RELAY: канал между клиентами Maneware (публичный pub/sub ntfy.sh).
+    -- Атрибуты/объекты, созданные клиентом, другие игроки не видят,
+    -- поэтому раньше чат и UserNash у других пользователей не работали.
+    -- Сообщения идут через ntfy.sh (тема = сервер игры), задержка ~5 сек.
+    ----------------------------------------------------------------
+    local relay = {enabled = true, users = {}, lastId = nil, ok = nil, seen = {}, startT = os.time(), onChat = nil,
+        topic = "maneware-mm2-" .. tostring((game.JobId ~= "" and game.JobId) or game.PlaceId)}
+    relay.users[LocalPlayer.UserId] = true
+    local function httpReq(opts)
+        local rq = request or http_request or (syn and syn.request) or (http and http.request)
+        if not rq then return nil end
+        local ok, res = pcall(rq, opts)
+        if ok and type(res) == "table" then return res end
+        return nil
+    end
+    local function relaySend(tbl)
+        tbl.u = LocalPlayer.UserId
+        local res = httpReq({Url = "https://ntfy.sh/" .. relay.topic, Method = "POST",
+            Headers = {["Content-Type"] = "text/plain"}, Body = HttpService:JSONEncode(tbl)})
+        return res ~= nil and (res.StatusCode == 200 or res.Success == true)
+    end
+    local function relayHandle(d, t)
+        if type(d) ~= "table" or type(d.u) ~= "number" then return end
+        if d.t == "hello" then
+            if Players:GetPlayerByUserId(d.u) then relay.users[d.u] = true end
+        elseif d.t == "bye" then
+            if d.u ~= LocalPlayer.UserId then relay.users[d.u] = nil end
+        elseif d.t == "chat" then
+            if d.u ~= LocalPlayer.UserId and (tonumber(t) or 0) >= relay.startT - 2
+                and type(d.m) == "string" and relay.onChat then
+                relay.onChat(tostring(d.n or "?"):sub(1, 32), d.m:sub(1, 200))
+            end
+        end
+    end
+    local function relayPoll()
+        local url = "https://ntfy.sh/" .. relay.topic .. "/json?poll=1&since=" .. (relay.lastId or "12h")
+        local res = httpReq({Url = url, Method = "GET"})
+        if not res then relay.ok = false return 15 end
+        if res.StatusCode == 429 then relay.ok = false return 25 end
+        if res.StatusCode ~= 200 then relay.ok = false return 15 end
+        relay.ok = true
+        for line in tostring(res.Body or ""):gmatch("[^\n]+") do
+            local ok, m = pcall(function() return HttpService:JSONDecode(line) end)
+            if ok and type(m) == "table" and m.event == "message" and m.id and not relay.seen[m.id] then
+                relay.seen[m.id] = true
+                relay.lastId = m.id
+                local ok2, d = pcall(function() return HttpService:JSONDecode(m.message) end)
+                if ok2 then pcall(relayHandle, d, m.time) end
+            end
+        end
+        return 5
+    end
+    task.spawn(function()
+        task.wait(2)
+        local helloSent = false
+        while true do
+            if relay.enabled then
+                if not helloSent then helloSent = relaySend({t = "hello", n = LocalPlayer.DisplayName}) end
+                local ok, waitT = pcall(relayPoll)
+                task.wait((ok and tonumber(waitT)) or 10)
+            else
+                helloSent = false
+                task.wait(2)
+            end
+        end
+    end)
+    Players.PlayerRemoving:Connect(function(pl) relay.users[pl.UserId] = nil end)
+    local function relaySetEnabled(v)
+        relay.enabled = v and true or false
+        if not v then task.spawn(relaySend, {t = "bye"}) end
+    end
 
     ----------------------------------------------------------------
     -- USERNASH: лого над головой игроков Maneware
@@ -3355,9 +3510,7 @@ X.buildNew = function()
                 end
                 for _, pl in ipairs(Players:GetPlayers()) do
                     -- свой + те, у кого атрибут ManewareUser (если реплицируется) или DisplayName с меткой
-                    local isMw = (pl == LocalPlayer)
-                        or (pl:GetAttribute("ManewareUser") == true)
-                        or (tostring(pl:GetAttribute("MW") or "") == "1")
+                    local isMw = (pl == LocalPlayer) or (relay.users[pl.UserId] == true)
                     if isMw then unApply(pl) else unClear(pl) end
                 end
             end)
@@ -3368,6 +3521,8 @@ X.buildNew = function()
     local tu = addTab("UserNash", ICONS.HAT)
     tu.Section("🏷 UserNash — лого над головой Maneware")
     tu.Toggle("UserNash", false, function(v) un.on = v if not v then for pl in pairs(unTags) do unClear(pl) end end end, ICONS.HAT)
+    tu.Section("📡 Relay (чат + UserNash между пользователями Maneware)")
+    tu.Toggle("Maneware Relay (видимость + чат)", true, function(v) relaySetEnabled(v) end, ICONS.UTIL)
 
     ----------------------------------------------------------------
     -- CHATMANEWARE: локальный чат для юзеров Maneware
@@ -3433,25 +3588,19 @@ X.buildNew = function()
         end)
     end
 
-    local PREFIX = "[MWCHAT]"
     local function chatSend()
         local text = tostring(inputBox.Text or ""):gsub("^%s+", ""):gsub("%s+$", "")
         if text == "" then return end
+        text = text:sub(1, 200)
         inputBox.Text = ""
         local nick = displayName()
         chatAdd(nick, text)
-        -- Рассылка через обычный чат с префиксом — другие Maneware-клиенты подхватят
-        pcall(function()
-            local payload = PREFIX .. HttpService:JSONEncode({n = nick, m = text})
-            if game:GetService("TextChatService") then
-                local tcs = game:GetService("TextChatService")
-                local ch = tcs.TextChannels and tcs.TextChannels:FindFirstChild("RBXGeneral")
-                if ch then ch:SendAsync(payload) return end
+        if not relay.enabled then chatAdd("System", "Relay выключен (вкладка UserNash)") return end
+        task.spawn(function()
+            if not relaySend({t = "chat", n = nick, m = text}) then
+                chatAdd("System", "Не отправилось: нет связи с relay")
             end
-            local chatSvc = game:GetService("Chat")
-            chatSvc:Chat(myChar() and myChar():FindFirstChild("Head"), payload, Enum.ChatColor.White)
         end)
-        pcall(function() LocalPlayer:SetAttribute("MWLastMsg", text) end)
     end
     onTap(sendBtn, chatSend)
     inputBox.FocusLost:Connect(function(enter) if enter then chatSend() end end)
@@ -3507,32 +3656,16 @@ X.buildNew = function()
         end)
     end
 
-    -- Приём сообщений MW из чата
-    local function onChatMsg(pl, msg)
-        if type(msg) ~= "string" or not msg:find(PREFIX, 1, true) then return end
-        local json = msg:sub(#PREFIX + 1)
-        local ok, data = pcall(function() return HttpService:JSONDecode(json) end)
-        if ok and type(data) == "table" and data.m then
-            if pl ~= LocalPlayer then
-                chatAdd(data.n or pl.DisplayName, data.m)
-            end
+    -- Приём сообщений: relay вызывает onChat для сообщений других пользователей Maneware
+    relay.onChat = function(nick, text) chatAdd(nick, text) end
+    task.spawn(function() -- индикатор связи в заголовке чата
+        while true do
+            task.wait(2)
+            chatTitle.Text = "Maneware Chat " .. (relay.ok == true and "●" or (relay.ok == false and "○ нет связи" or "…"))
         end
-    end
-    pcall(function()
-        local tcs = game:GetService("TextChatService")
-        tcs.MessageReceived:Connect(function(msg)
-            local pl = Players:GetPlayerByUserId(msg.TextSource and msg.TextSource.UserId or 0)
-            if pl then onChatMsg(pl, msg.Text) end
-        end)
-    end)
-    for _, pl in ipairs(Players:GetPlayers()) do
-        pl.Chatted:Connect(function(msg) onChatMsg(pl, msg) end)
-    end
-    Players.PlayerAdded:Connect(function(pl)
-        pl.Chatted:Connect(function(msg) onChatMsg(pl, msg) end)
     end)
 
-    chatAdd("System", "Чат Maneware готов. Пиши снизу.")
+    chatAdd("System", "Чат Maneware готов. Видят только пользователи Maneware на этом сервере (задержка ~5 сек).")
 end
 end)() -- v10/v11 блок
 
@@ -3666,7 +3799,7 @@ t7.Toggle("Autofarm", false, function(v)
     end
 end, ICONS.COIN)
 t7.Slider("Скорость фарма", 16, 50, 30, " st/s", function(v) farm.speed = v end)
-t7.Slider("Высота над монетой (не проваливаться)", 0, 6, 3, " st", function(v) farm.height = v end)
+t7.Slider("Высота над монетой (0 = касаемся конфеты)", 0, 6, 0, " st", function(v) farm.height = v end)
 t7.Slider("Лимит монет (мешок)", 10, 60, 40, "", function(v) farm.limit = v end)
 t7.Toggle("Проверка на игру (ждать раунд)", true, function(v) farm.waitGame = v end, ICONS.UTIL)
 t7.Toggle("Fling Murderer после лимита", false, function(v) farm.flingMurd = v end, ICONS.FLING)
@@ -3708,6 +3841,12 @@ t10.Toggle("Molnia (молния в месте смерти)", false, function(v
 t10.Toggle("Star (звёзды из тела)", false, function(v) fx.star = v end, ICONS.TARGET)
 t10.Slider("Star: количество", 1, 10, 5, "", function(v) fx.starCount = v end)
 t10.Slider("Star: скорость", 1, 5, 2, "", function(v) fx.starSpeed = v end)
+t10.Section("⭐ Кастомные неоновые звёзды")
+radioGroup(t10, "Star форма: ", fx.styleNames, 2, function(i) fx.starStyle = i end, ICONS.TARGET)
+t10.Slider("Star: размер", 0.5, 3, 1, "x", function(v) fx.starSize = v end, 0.1)
+t10.Slider("Star: цвет (оттенок)", 0, 360, 48, "°", function(v) fx.starHue = v end, 5)
+t10.Toggle("Star: радужные", false, function(v) fx.starRainbow = v end, ICONS.TARGET)
+t10.Toggle("Star: свечение", true, function(v) fx.starGlow = v end, ICONS.EYE)
 t10.Button("▶ Проверить эффекты (на мне)", function()
     local h, ch = myHrp(), myChar()
     if not h or not ch then return end
@@ -3722,7 +3861,7 @@ local MM2_MAPS = {
     "Nook's Cranny", "Beach House", "Ski Lodge", "Casino", "Library", "Christmas House",
     "Ice Castle", "Village", "Colosseum", "Zoo", "Train Station", "Workshop",
 }
-local dupe = {map = 1, amount = 5, busy = false, rec = false, cap = nil, hooked = false}
+local dupe = {map = 1, amount = 20, busy = false, rec = false, cap = nil, hooked = false, delay = 0, auto = false, interval = 2}
 pcall(function()
     if hookmetamethod and getnamecallmethod then
         local old
@@ -3781,62 +3920,75 @@ local function clickBtn(b)
     return done
 end
 
-local function doDupeVote()
-    if dupe.busy then notify("DupeVote: уже идёт") return end
+local function doDupeVote(silent)
+    if dupe.busy then
+        if not silent then notify("DupeVote: уже идёт") end
+        return
+    end
     dupe.busy = true
     task.spawn(function()
-        local mapName = MM2_MAPS[dupe.map] or MM2_MAPS[1]
-        local amt = math.clamp(math.floor(tonumber(dupe.amount) or 5), 1, 40)
-        local sent = 0
-        notify("DupeVote: " .. mapName .. " x" .. amt)
-        -- 1) повтор записанного голоса
-        local cap = dupe.cap
-        if cap and cap.r.Parent then
-            for _ = 1, amt do
-                local a = mapArgs(cap.a)
-                if cap.m == "FireServer" then
-                    if pcall(function() cap.r:FireServer((table.unpack or unpack)(a, 1, a.n)) end) then sent = sent + 1 end
-                else
-                    task.spawn(function() pcall(function() cap.r:InvokeServer((table.unpack or unpack)(a, 1, a.n)) end) end)
-                    sent = sent + 1
-                end
-                task.wait(0.05)
+        pcall(function()
+            local mapName = MM2_MAPS[dupe.map] or MM2_MAPS[1]
+            local amt = math.clamp(math.floor(tonumber(dupe.amount) or 20), 1, 200)
+            local dl = math.clamp(tonumber(dupe.delay) or 0, 0, 200) / 1000
+            local up = table.unpack or unpack
+            local sent = 0
+            -- пауза между голосами: 0 = пачкой без ожидания (раз в 25 отправок уступаем кадр)
+            local function gap(n)
+                if dl > 0 then task.wait(dl) elseif n % 25 == 0 then task.wait() end
             end
-        end
-        -- 2) кнопка карты в GUI
-        if sent == 0 then
-            local pg = LocalPlayer:FindFirstChild("PlayerGui")
-            if pg then
-                for _, d in ipairs(pg:GetDescendants()) do
-                    if d:IsA("GuiButton") and btnMatches(d, mapName) then
-                        for _ = 1, amt do
-                            if clickBtn(d) then sent = sent + 1 end
-                            task.wait(0.05)
+            if not silent then notify("DupeVote: " .. mapName .. " x" .. amt) end
+            -- 1) повтор записанного голоса (каждый вызов в своём потоке, не ждём ответ сервера)
+            local cap = dupe.cap
+            if cap and cap.r and cap.r.Parent then
+                for n = 1, amt do
+                    local a = mapArgs(cap.a)
+                    if cap.m == "FireServer" then
+                        task.spawn(function() pcall(function() cap.r:FireServer(up(a, 1, a.n)) end) end)
+                    else
+                        task.spawn(function() pcall(function() cap.r:InvokeServer(up(a, 1, a.n)) end) end)
+                    end
+                    sent = sent + 1
+                    gap(n)
+                end
+            end
+            -- 2) кнопка карты в GUI
+            if sent == 0 then
+                local pg = LocalPlayer:FindFirstChild("PlayerGui")
+                if pg then
+                    for _, d in ipairs(pg:GetDescendants()) do
+                        if d:IsA("GuiButton") and btnMatches(d, mapName) then
+                            for n = 1, amt do
+                                if clickBtn(d) then sent = sent + 1 end
+                                gap(n)
+                            end
+                            break
                         end
-                        break
                     end
                 end
             end
-        end
-        -- 3) ремоуты с "vote" в имени
-        if sent == 0 then
-            pcall(function()
+            -- 3) ремоуты с "vote" в имени
+            if sent == 0 then
                 for _, d in ipairs(game:GetService("ReplicatedStorage"):GetDescendants()) do
                     if (d:IsA("RemoteEvent") or d:IsA("RemoteFunction")) and d.Name:lower():find("vote") then
-                        for _ = 1, amt do
+                        for n = 1, amt do
                             if d:IsA("RemoteEvent") then
-                                d:FireServer(mapName) d:FireServer(dupe.map)
+                                task.spawn(function() pcall(function() d:FireServer(mapName) d:FireServer(dupe.map) end) end)
                             else
                                 task.spawn(function() pcall(function() d:InvokeServer(mapName) end) end)
                             end
                             sent = sent + 1
-                            task.wait(0.05)
+                            gap(n)
                         end
                     end
                 end
-            end)
-        end
-        notify(sent > 0 and ("DupeVote: отправлено " .. sent) or "DupeVote: не сработало. Включи запись и проголосуй вручную")
+            end
+            if sent > 0 then
+                if not silent then notify("DupeVote: отправлено " .. sent) end
+            elseif not silent then
+                notify("DupeVote: не сработало. Включи запись и проголосуй вручную")
+            end
+        end)
         dupe.busy = false
     end)
 end
@@ -3849,13 +4001,26 @@ tDV.ToggleDrop("Карта", true, function() end, ICONS.TP, mapLabels, 1, funct
     dupe.map = i
     notify("Карта: " .. (MM2_MAPS[i] or "?"))
 end)
-tDV.Slider("Количество голосов", 1, 40, 5, "", function(v) dupe.amount = v end)
+tDV.Slider("Количество голосов", 1, 200, 20, "", function(v) dupe.amount = v end)
+tDV.Slider("Пауза между голосами (0 = максимально быстро)", 0, 100, 0, " мс", function(v) dupe.delay = v end, 5)
 tDV.Toggle("DupeVote: запись (проголосуй вручную)", false, function(v)
     if v and not dupe.hooked then notify("DupeVote: нет hookmetamethod") return end
     dupe.rec = v
     if v then dupe.cap = nil notify("DupeVote: проголосуй за любую карту") end
 end, ICONS.UTIL)
-tDV.Button("▶ DupeVote сейчас", doDupeVote)
+tDV.Button("▶ DupeVote сейчас", function() doDupeVote(false) end)
+tDV.Slider("Авто: повтор каждые", 1, 10, 2, " сек", function(v) dupe.interval = v end, 0.5)
+tDV.Toggle("DupeVote: Авто-повтор (голосует снова и снова)", false, function(v)
+    dupe.auto = v
+    if v then
+        task.spawn(function()
+            while dupe.auto do
+                pcall(doDupeVote, true)
+                task.wait(math.max(0.5, tonumber(dupe.interval) or 2))
+            end
+        end)
+    end
+end, ICONS.UTIL)
 
 -- CustomModel
 local t11 = addTab("CustomModel", ICONS.HAT)
@@ -4630,7 +4795,7 @@ if not okUI then
     notify("Ошибка UI: " .. tostring(errUI))
 end
 
-print("[Maneware] v11.8 загружен")
+print("[Maneware] v11.9 загружен")
 -- Принудительно показать меню
 pcall(function()
     if hubGui then hubGui.Enabled = true end
@@ -4698,18 +4863,18 @@ local function status(text, kind, ttl)
     end
 end
 
-status("Maneware v11.8 (build 8): компиляция…", "info", 3)
+status("Maneware v11.9 (build 9): компиляция…", "info", 3)
 local fn, cerr = loadstring(SRC, "=Maneware")
 if not fn then
-    status("[v11.8, wrap=ON] ОШИБКА КОМПИЛЯЦИИ:\n" .. tostring(cerr), "err")
+    status("[v11.9, wrap=ON] ОШИБКА КОМПИЛЯЦИИ:\n" .. tostring(cerr), "err")
     warn("[Maneware] compile error: " .. tostring(cerr))
     return
 end
-status("Maneware v11.8: запуск…", "info", 3)
+status("Maneware v11.9: запуск…", "info", 3)
 local ok, err = xpcall(fn, function(e) return tostring(e) .. "\n" .. tostring(debug.traceback()) end)
 if not ok then
-    status("[v11.8] ОШИБКА ЗАПУСКА:\n" .. tostring(err), "err")
+    status("[v11.9] ОШИБКА ЗАПУСКА:\n" .. tostring(err), "err")
     warn("[Maneware] runtime error: " .. tostring(err))
 else
-    status("Maneware v11.8 загружен ✔  (кнопка меню справа)", "ok", 5)
+    status("Maneware v11.9 загружен ✔  (кнопка меню справа)", "ok", 5)
 end
