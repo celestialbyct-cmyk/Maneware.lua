@@ -1,7 +1,7 @@
--- Maneware MM2 v11.9 | Loader с диагностикой (Delta, телефон)
+-- Maneware MM2 v11.10 | Loader с диагностикой (Delta, телефон)
 -- Если меню не появилось, на экране будет красная плашка с текстом ошибки.
 local SRC = [==[-- Maneware MM2 v11 | Mobile (Delta)
--- v11.9: GUI fix for Delta 2.743.1136 (gethui -> CoreGui -> PlayerGui, watchdog, probe)
+-- v11.10: GUI fix for Delta 2.743.1136 (gethui -> CoreGui -> PlayerGui, watchdog, probe)
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local UIS = game:GetService("UserInputService")
@@ -1025,23 +1025,83 @@ LocalPlayer.Idled:Connect(function()
     end
 end)
 
-RunService.Stepped:Connect(function()
-    if not antiFling then return end
-    for _, p in ipairs(Players:GetPlayers()) do
-        if p ~= LocalPlayer and p.Character then
-            for _, part in ipairs(p.Character:GetChildren()) do
-                if part:IsA("BasePart") then part.CanCollide = false end
+do -- Улучшенный AntiFling (всё внутри блока, чтобы не расходовать лимит локальных переменных)
+    -- 1) у ВСЕХ частей чужих персонажей (в т.ч. аксессуары и инструменты) отключаем столкновения, каждый кадр
+    -- 2) если нас резко подбросило/закрутило - гасим скорость и возвращаем на позицию несколькими кадрами раньше
+    local cache = {}
+    local lastScan = 0
+    local safeQ = {}
+    local function rescan(pl)
+        local list = {}
+        local ch = pl.Character
+        if ch then
+            for _, d in ipairs(ch:GetDescendants()) do
+                if d:IsA("BasePart") then list[#list + 1] = d end
             end
         end
+        cache[pl] = list
     end
-    local hrp = myHrp()
-    if hrp and not flyEnabled then
-        if hrp.AssemblyLinearVelocity.Magnitude > 150 or hrp.AssemblyAngularVelocity.Magnitude > 40 then
+    local function hookChar(pl)
+        local function onChar(ch)
+            rescan(pl)
+            ch.DescendantAdded:Connect(function(d)
+                if d:IsA("BasePart") then
+                    local l = cache[pl]
+                    if l then l[#l + 1] = d end
+                    if antiFling then d.CanCollide = false end
+                end
+            end)
+        end
+        if pl.Character then task.spawn(onChar, pl.Character) end
+        pl.CharacterAdded:Connect(function(ch) task.wait(0.2) onChar(ch) end)
+    end
+    for _, pl in ipairs(Players:GetPlayers()) do
+        if pl ~= LocalPlayer then hookChar(pl) end
+    end
+    Players.PlayerAdded:Connect(function(pl) if pl ~= LocalPlayer then hookChar(pl) end end)
+    Players.PlayerRemoving:Connect(function(pl) cache[pl] = nil end)
+
+    RunService.Stepped:Connect(function() -- перед каждым шагом физики
+        if not antiFling then return end
+        if os.clock() - lastScan > 0.5 then
+            lastScan = os.clock()
+            for pl in pairs(cache) do
+                if pl.Parent then rescan(pl) end
+            end
+        end
+        for _, list in pairs(cache) do
+            for i = #list, 1, -1 do
+                local p = list[i]
+                if p.Parent then
+                    if p.CanCollide then p.CanCollide = false end
+                else
+                    table.remove(list, i)
+                end
+            end
+        end
+    end)
+
+    RunService.Heartbeat:Connect(function()
+        if not antiFling then
+            safeQ = {}
+            return
+        end
+        local hrp, hum = myHrp(), myHum()
+        if not hrp or not hum or flingBusy or flyEnabled then return end
+        local v, w = hrp.AssemblyLinearVelocity, hrp.AssemblyAngularVelocity
+        local mv = hum.MoveDirection * hum.WalkSpeed -- ожидаемая скорость ходьбы (с учётом SpeedHack)
+        local dev = Vector3.new(v.X - mv.X, 0, v.Z - mv.Z).Magnitude
+        if dev > 120 or math.abs(v.Y) > 300 or w.Magnitude > 40 then
             hrp.AssemblyLinearVelocity = Vector3.zero
             hrp.AssemblyAngularVelocity = Vector3.zero
+            if safeQ[1] then hrp.CFrame = safeQ[1] end
+            pcall(function() hum:ChangeState(Enum.HumanoidStateType.GettingUp) end)
+        else
+            safeQ[#safeQ + 1] = hrp.CFrame
+            if #safeQ > 8 then table.remove(safeQ, 1) end
         end
-    end
-end)
+    end)
+end
 
 local fpsBoost
 do -- fpsSaved/fpsConn спрятаны в блок (экономим локальные переменные)
@@ -1360,6 +1420,8 @@ end)
 -- в цели, в Stepped/RenderStepped гасим её. Сервер видит удар, а нас самих
 -- не уносит. В конце возвращаемся на исходную точку.
 --------------------------------------------------
+local fl = {bypass = false, tries = 3, time = 4, spectate = true}
+
 local function flingPlayer(target)
     if flingBusy then notify("Fling уже идёт") return end
     if grabBusy then notify("Подожди, идёт GrabGun") return end
@@ -1371,46 +1433,106 @@ local function flingPlayer(target)
     if not hrp or not hum or not thrp then notify("Игрок недоступен") return end
 
     flingBusy = true
+    local char = myChar()
     local origin = hrp.CFrame
     local startPos = thrp.Position
     local prevAnti = antiFling
     antiFling = false          -- иначе AntiFling уберёт коллизии и фling не сработает
     toggleNoclip(false)        -- чтобы наши части сталкивались с целью
+    local hold = hrp:FindFirstChild("MWFarmHold") -- удержание автофарма мешает скорости
+    if hold then hold:Destroy() end
+    hrp.Anchored = false
+    pcall(function() hum.Sit = false end)
 
-    local stepConn = RunService.Stepped:Connect(function()
-        local h = myHrp()
-        if h then
-            h.AssemblyLinearVelocity = Vector3.zero
-            h.AssemblyAngularVelocity = Vector3.zero
-        end
-    end)
-    local hbConn = RunService.Heartbeat:Connect(function()
-        local h = myHrp()
-        local tch = target.Character
-        local tr = tch and tch:FindFirstChild("HumanoidRootPart")
-        if not h or not tr then return end
-        h.CFrame = tr.CFrame + tr.AssemblyLinearVelocity * 0.08
-        h.AssemblyLinearVelocity = Vector3.new(1e5, 1e5, 1e5)
-        h.AssemblyAngularVelocity = Vector3.new(1e5, 1e5, 1e5)
-    end)
-
-    pcall(function()
-        local t0 = os.clock()
-        while os.clock() - t0 < 3 do
-            task.wait(0.1)
-            local tch = target.Character
-            local tr = tch and tch:FindFirstChild("HumanoidRootPart")
-            local th = tch and tch:FindFirstChildOfClass("Humanoid")
-            if not tr or not th or th.Health <= 0 or not myHrp() then break end
-            if tr.AssemblyLinearVelocity.Magnitude > 300 or (tr.Position - startPos).Magnitude > 120 then
-                task.wait(0.15)
-                break -- улетел
+    -- запоминаем физику своих частей, чтобы вернуть после флинга
+    local saved, allParts, direct = {}, {}, {}
+    for _, d in ipairs(char:GetDescendants()) do
+        if d:IsA("BasePart") then
+            saved[d] = {cc = d.CanCollide, pp = d.CustomPhysicalProperties, ml = d.Massless}
+            allParts[#allParts + 1] = d
+            if fl.bypass then -- тяжёлые части: больше импульс при ударе
+                d.CustomPhysicalProperties = PhysicalProperties.new(100, 0.3, 0, 1, 1)
+                d.Massless = false
             end
         end
+    end
+    for _, d in ipairs(char:GetChildren()) do
+        if d:IsA("BasePart") then direct[#direct + 1] = d end
+    end
+    local offs = {Vector3.new(0, 0, 0), Vector3.new(0, 2, 0), Vector3.new(0, -2, 0), Vector3.new(1.5, 0, 0),
+        Vector3.new(-1.5, 0, 0), Vector3.new(0, 0, 1.5), Vector3.new(0, 0, -1.5)}
+
+    local flung = false
+    local stepConn, hbConn
+    local ok, err = pcall(function()
+        local tries = math.clamp(math.floor(tonumber(fl.tries) or 3), 1, 5)
+        local per = math.clamp((tonumber(fl.time) or 4) / tries, 0.8, 5)
+        for attempt = 1, tries do
+            if flung then break end
+            local th0 = target.Character and target.Character:FindFirstChildOfClass("Humanoid")
+            if fl.spectate and th0 then pcall(function() Camera.CameraSubject = th0 end) end -- держит цель прогруженной
+            local lead = getRtt() * 0.5 + 0.02 -- упреждение на задержку сети
+            -- до физики гасим свою скорость и держим столкновения включёнными
+            -- (в режиме Bypass включены ВСЕ части, в том числе аксессуары и инструменты)
+            stepConn = RunService.Stepped:Connect(function()
+                local h = myHrp()
+                if h then
+                    h.AssemblyLinearVelocity = Vector3.zero
+                    h.AssemblyAngularVelocity = Vector3.zero
+                end
+                for _, p in ipairs(fl.bypass and allParts or direct) do
+                    if p.Parent and not p.CanCollide then p.CanCollide = true end
+                end
+            end)
+            -- после физики ставим огромную скорость и сидим в цели (сервер видит удар, нас не уносит)
+            local idx = attempt
+            hbConn = RunService.Heartbeat:Connect(function()
+                local h = myHrp()
+                local tch = target.Character
+                local tr = tch and tch:FindFirstChild("HumanoidRootPart")
+                if not h or not tr then return end
+                idx = idx % #offs + 1
+                local pred = tr.Position + tr.AssemblyLinearVelocity * lead
+                h.CFrame = CFrame.new(pred + offs[idx])
+                    * CFrame.Angles(math.random() * 6.28, math.random() * 6.28, math.random() * 6.28)
+                h.AssemblyLinearVelocity = Vector3.new(1e6, 1e6, 1e6)
+                h.AssemblyAngularVelocity = Vector3.new(1e7, 1e7, 1e7)
+            end)
+            local t0 = os.clock()
+            while os.clock() - t0 < per do
+                task.wait(0.05)
+                local tch = target.Character
+                local tr = tch and tch:FindFirstChild("HumanoidRootPart")
+                local th = tch and tch:FindFirstChildOfClass("Humanoid")
+                if not tr or not th or th.Health <= 0 or not myHrp() then flung = true break end
+                if tr.AssemblyLinearVelocity.Magnitude > 250 or (tr.Position - startPos).Magnitude > 140
+                    or tr.Position.Y < startPos.Y - 300 then
+                    task.wait(0.15)
+                    flung = true
+                    break
+                end
+            end
+            hbConn:Disconnect() hbConn = nil
+            stepConn:Disconnect() stepConn = nil
+            local h = myHrp()
+            if h then
+                h.AssemblyLinearVelocity = Vector3.zero
+                h.AssemblyAngularVelocity = Vector3.zero
+            end
+            if not flung then task.wait(0.15) end
+        end
     end)
 
-    hbConn:Disconnect()
-    stepConn:Disconnect()
+    if hbConn then hbConn:Disconnect() end
+    if stepConn then stepConn:Disconnect() end
+    for part, st in pairs(saved) do -- возвращаем физику частей
+        pcall(function()
+            part.CanCollide = st.cc
+            part.CustomPhysicalProperties = st.pp
+            part.Massless = st.ml
+        end)
+    end
+    pcall(function() Camera.CameraSubject = myHum() or hum end)
     for _ = 1, 12 do -- возвращаемся и гасим всё, что могло накопиться
         local h = myHrp()
         if h then
@@ -1423,6 +1545,12 @@ local function flingPlayer(target)
     antiFling = prevAnti
     toggleNoclip(noclipUser)
     flingBusy = false
+    if not ok then warn("[Maneware] fling: " .. tostring(err)) end
+    if flung then
+        notify("Fling: цель улетела")
+    else
+        notify("Fling: не вышло" .. (fl.bypass and " (у цели сильный AntiFling)" or ", попробуй включить Bypass AntiFling"))
+    end
 end
 
 local function flingRole(role)
@@ -3778,6 +3906,11 @@ local t6 = addTab("Fling", ICONS.FLING)
 t6.Section("🌀 Fling (вернёт на прежнее место)")
 t6.Button("Fling Murderer", function() flingRole("Murderer") end)
 t6.Button("Fling Sheriff", function() flingRole("Sheriff") end)
+t6.Section("⚙ Настройки флинга")
+t6.Toggle("Fling: Bypass AntiFling", false, function(v) fl.bypass = v end, ICONS.SHIELD)
+t6.Slider("Fling: попытки", 1, 5, 3, "", function(v) fl.tries = v end)
+t6.Slider("Fling: общее время", 2, 10, 4, " сек", function(v) fl.time = v end)
+t6.Toggle("Fling: камера на цель (точнее)", true, function(v) fl.spectate = v end, ICONS.EYE)
 t6.Section("👥 Игроки на сервере")
 local refreshList
 t6.Button("🔄 Обновить список", function() if refreshList then refreshList() end end)
@@ -4795,7 +4928,7 @@ if not okUI then
     notify("Ошибка UI: " .. tostring(errUI))
 end
 
-print("[Maneware] v11.9 загружен")
+print("[Maneware] v11.10 загружен")
 -- Принудительно показать меню
 pcall(function()
     if hubGui then hubGui.Enabled = true end
@@ -4863,18 +4996,18 @@ local function status(text, kind, ttl)
     end
 end
 
-status("Maneware v11.9 (build 9): компиляция…", "info", 3)
+status("Maneware v11.10 (build 10): компиляция…", "info", 3)
 local fn, cerr = loadstring(SRC, "=Maneware")
 if not fn then
-    status("[v11.9, wrap=ON] ОШИБКА КОМПИЛЯЦИИ:\n" .. tostring(cerr), "err")
+    status("[v11.10, wrap=ON] ОШИБКА КОМПИЛЯЦИИ:\n" .. tostring(cerr), "err")
     warn("[Maneware] compile error: " .. tostring(cerr))
     return
 end
-status("Maneware v11.9: запуск…", "info", 3)
+status("Maneware v11.10: запуск…", "info", 3)
 local ok, err = xpcall(fn, function(e) return tostring(e) .. "\n" .. tostring(debug.traceback()) end)
 if not ok then
-    status("[v11.9] ОШИБКА ЗАПУСКА:\n" .. tostring(err), "err")
+    status("[v11.10] ОШИБКА ЗАПУСКА:\n" .. tostring(err), "err")
     warn("[Maneware] runtime error: " .. tostring(err))
 else
-    status("Maneware v11.9 загружен ✔  (кнопка меню справа)", "ok", 5)
+    status("Maneware v11.10 загружен ✔  (кнопка меню справа)", "ok", 5)
 end
