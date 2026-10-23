@@ -4346,10 +4346,14 @@ local function cfgSave(name)
     data._author = LocalPlayer.DisplayName .. " (@" .. LocalPlayer.Name .. ")"
     data._configName = name
     data._createdAt = os.date("!%Y-%m-%d %H:%M:%S")
-    -- позиции UI / биндов (если уже созданы)
-    if X.collectUI then
-        data._ui = X.collectUI()
+    -- Дополнительные параметры CustomModel / GunModel и ID моделей.
+    data._custom = {customModel = {on = cm.on, sel = cm.sel, size = cm.size},
+        gunModel = {on = gm.on, sel = gm.sel, size = gm.size, rot = gm.rot}, assets = {}}
+    for k, v in pairs(assetCache) do
+        if type(k) == "string" and (k:sub(1, 6) == "model:" or k:sub(1, 6) == "sound:") then data._custom.assets[k] = v end
     end
+    -- В конфиг записывается имя и положение каждого существующего бинда.
+    if X.collectUI then data._ui = X.collectUI() end
     local ok = pcall(function()
         writefile(CFG_DIR .. "/" .. name .. ".json", HttpService:JSONEncode(data))
     end)
@@ -4362,14 +4366,36 @@ local function cfgLoad(name)
     end)
     if not ok or type(data) ~= "table" then notify("Не удалось загрузить") return end
     for key, val in pairs(data) do
-        if key ~= "_ui" then
+        if key:sub(1, 1) ~= "_" then
             local e = REG[key]
             if e then pcall(e.set, val, true) end
         end
     end
-    if data._ui and X.applyUI then
-        pcall(X.applyUI, data._ui)
+    if type(data._custom) == "table" then
+        local c = data._custom
+        if type(c.customModel) == "table" then
+            if tonumber(c.customModel.sel) then cm.sel = math.clamp(math.floor(c.customModel.sel), 1, #MODEL_SLOTS) end
+            if tonumber(c.customModel.size) then cm.size = math.clamp(c.customModel.size, 0.2, 3) end
+            if type(c.customModel.on) == "boolean" then cm.on = c.customModel.on end
+        end
+        if type(c.gunModel) == "table" then
+            if tonumber(c.gunModel.sel) then gm.sel = math.clamp(math.floor(c.gunModel.sel), 1, #GM_SLOTS) end
+            if tonumber(c.gunModel.size) then gm.size = math.clamp(c.gunModel.size, 0.2, 3) end
+            if tonumber(c.gunModel.rot) then gm.rot = c.gunModel.rot % 360 end
+            if type(c.gunModel.on) == "boolean" then gm.on = c.gunModel.on end
+        end
+        if type(c.assets) == "table" then
+            for k, v in pairs(c.assets) do
+                if type(k) == "string" and (k:sub(1, 6) == "model:" or k:sub(1, 6) == "sound:") and tonumber(v) then assetCache[k] = tonumber(v) end
+            end
+            pcall(saveAssets)
+        end
     end
+    if data._ui and X.applyUI then pcall(X.applyUI, data._ui) end
+    task.defer(function()
+        if cm.on then pcall(applyCustomModel) else pcall(clearCustomModel) end
+        if gm.on then gm.cur = nil else pcall(gmClearAll) end
+    end)
     activeCfg = name
     notify("Загружен: " .. name)
 end
@@ -4415,6 +4441,69 @@ local function cfgRefresh()
         })
     end
 end
+-- Онлайн-библиотека. Требует развернутый Cloudflare Worker URL; сам Delta сервером не является.
+local onlineApiBox = t9.TextBox("URL онлайн-сервера Cloudflare Worker")
+local onlineHolder
+local function onlineRequest(url, method, body)
+    local rq = request or http_request or (syn and syn.request) or (http and http.request)
+    if not rq then notify("Delta: HTTP request API недоступен") return nil end
+    local opts = {Url = url, Method = method or "GET", Headers = { ["Content-Type"] = "application/json" }}
+    if body then opts.Body = body end
+    local ok, res = pcall(rq, opts)
+    if not ok or type(res) ~= "table" or (res.StatusCode and res.StatusCode >= 400) then
+        notify("Онлайн-сервер недоступен" .. (res and res.StatusCode and (" (" .. tostring(res.StatusCode) .. ")") or ""))
+        return nil
+    end
+    local success, decoded = pcall(function() return HttpService:JSONDecode(res.Body or "{}") end)
+    if not success then notify("Сервер вернул некорректный JSON") return nil end
+    return decoded
+end
+local function onlineBase()
+    local u = cleanName("") -- очистка имени не меняет URL; используется только для проверки строки ниже
+    u = tostring(onlineApiBox.Text or ""):gsub("%s+$", ""):gsub("^%s+", ""):gsub("/+$", "")
+    if not u:match("^https://") then notify("Вставь HTTPS URL своего Worker") return nil end
+    return u
+end
+local function onlineUpload()
+    local base = onlineBase(); if not base then return end
+    local name = activeCfg or cleanName(cfgName.Text)
+    if name == "" then notify("Сначала сохрани конфиг локально") return end
+    local ok, raw = pcall(function() return readfile(CFG_DIR .. "/" .. name .. ".json") end)
+    if not ok or type(raw) ~= "string" then notify("Не удалось прочитать локальный конфиг") return end
+    local result = onlineRequest(base .. "/configs", "POST", raw)
+    if result and result.id then notify("Опубликован онлайн: " .. tostring(result.name) .. " / ID " .. tostring(result.id)) end
+end
+local function onlineRefresh()
+    local base = onlineBase(); if not base then return end
+    if not onlineHolder then
+        t9.Section("🌐 Онлайн-конфиги")
+        onlineHolder = t9.Holder()
+    end
+    for _, ch in ipairs(onlineHolder:GetChildren()) do if ch:IsA("Frame") then ch:Destroy() end end
+    local result = onlineRequest(base .. "/configs", "GET")
+    if not result or type(result.configs) ~= "table" then return end
+    for i, item in ipairs(result.configs) do
+        local id = tostring(item.id or "")
+        if id:match("^[a-fA-F0-9]+$") then
+            addRow(onlineHolder, i, tostring(item.name or "Config") .. " • " .. tostring(item.author or "Unknown"), {
+                {text = "Load", color = C.GREEN, w = 48, fn = function()
+                    local b = onlineBase(); if not b then return end
+                    local got = onlineRequest(b .. "/configs/" .. id, "GET")
+                    if not got or type(got.config) ~= "table" then return end
+                    local n = cleanName(tostring(got.config._configName or ("online_" .. id)))
+                    if n == "" then n = "online_" .. id end
+                    pcall(function() writefile(CFG_DIR .. "/" .. n .. ".json", HttpService:JSONEncode(got.config)) end)
+                    cfgLoad(n)
+                end},
+                {text = "ID", color = C.ACCENT, w = 38, fn = function() notify("Online ID: " .. id) end},
+            })
+        end
+    end
+    notify("Онлайн-список обновлён")
+end
+t9.Button("☁️ Опубликовать открытый/последний конфиг", onlineUpload)
+t9.Button("🌐 Обновить онлайн-библиотеку", onlineRefresh)
+
 t9.Button("💾 Сохранить конфиг (по имени выше)", function()
     cfgSave(cfgName.Text)
     cfgRefresh()
