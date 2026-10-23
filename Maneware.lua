@@ -1,4 +1,4 @@
--- Maneware MM2 v11.10 | Loader с диагностикой (Delta, телефон)
+-- Maneware MM2 v11.11 | Loader с диагностикой (Delta, телефон)
 -- Если меню не появилось, на экране будет красная плашка с текстом ошибки.
 local SRC = [==[-- Maneware MM2 v11 | Mobile (Delta)
 -- v11.10: GUI fix for Delta 2.743.1136 (gethui -> CoreGui -> PlayerGui, watchdog, probe)
@@ -33,14 +33,22 @@ local function writeJson(name, tbl)
     ensureDir()
     return pcall(function() writefile(DATA_DIR .. "/" .. name, HttpService:JSONEncode(tbl)) end)
 end
--- UID = порядковый номер запуска скрипта (с первого запуска этой версии)
-local UID = 1
+-- UID = порядковый номер запуска скрипта. v11.11: один раз возвращён на 39, дальше считает как раньше (40, 41...)
+local UID = 39
 pcall(function()
     ensureDir()
-    local n = 0
-    if isfile and readfile and isfile(DATA_DIR .. "/uid.txt") then n = tonumber(readfile(DATA_DIR .. "/uid.txt")) or 0 end
-    UID = n + 1
-    writefile(DATA_DIR .. "/uid.txt", tostring(UID))
+    if isfile and readfile and writefile then
+        local marker = DATA_DIR .. "/uid_fix39.txt"
+        if not isfile(marker) then
+            UID = 39
+            writefile(marker, "1")
+        else
+            local n = 38
+            if isfile(DATA_DIR .. "/uid.txt") then n = tonumber(readfile(DATA_DIR .. "/uid.txt")) or 38 end
+            UID = n + 1
+        end
+        writefile(DATA_DIR .. "/uid.txt", tostring(UID))
+    end
 end)
 
 local C = {
@@ -4335,30 +4343,60 @@ end
 local function cfgSupported()
     return writefile ~= nil and readfile ~= nil and isfolder ~= nil and makefolder ~= nil and listfiles ~= nil
 end
+local CFG_RESERVED = {ui = true, assets = true} -- служебные файлы, не конфиги
 local function cfgSave(name)
     name = cleanName(name)
-    if name == "" then notify("Введи имя конфига") return end
-    if not cfgSupported() then notify("Executor не поддерживает файлы") return end
+    if name == "" then notify("Конфиги: введи имя конфига") return false end
+    if not cfgSupported() then notify("Конфиги: executor не поддерживает файлы") return false end
+    if CFG_RESERVED[name] then notify("Конфиги: это имя зарезервировано, выбери другое") return false end
     pcall(function() if not isfolder(CFG_DIR) then makefolder(CFG_DIR) end end)
     local data = {}
-    for key, e in pairs(REG) do data[key] = e.get() end
+    for key, e in pairs(REG) do
+        local okG, v = pcall(e.get)
+        local t = type(v)
+        if okG and (t == "boolean" or t == "string" or t == "table"
+            or (t == "number" and v == v and v ~= math.huge and v ~= -math.huge)) then
+            data[key] = v
+        end
+    end
     -- Метаданные автора для локальной библиотеки (имя отображения, не верификация личности).
-    data._author = LocalPlayer.DisplayName .. " (@" .. LocalPlayer.Name .. ")"
+    pcall(function() data._author = LocalPlayer.DisplayName .. " (@" .. LocalPlayer.Name .. ")" end)
     data._configName = name
     data._createdAt = os.date("!%Y-%m-%d %H:%M:%S")
     -- Дополнительные параметры CustomModel / GunModel и ID моделей.
-    data._custom = {customModel = {on = cm.on, sel = cm.sel, size = cm.size},
-        gunModel = {on = gm.on, sel = gm.sel, size = gm.size, rot = gm.rot}, assets = {}}
-    for k, v in pairs(assetCache) do
-        if type(k) == "string" and (k:sub(1, 6) == "model:" or k:sub(1, 6) == "sound:") then data._custom.assets[k] = v end
-    end
-    -- В конфиг записывается имя и положение каждого существующего бинда.
-    if X.collectUI then data._ui = X.collectUI() end
-    local ok = pcall(function()
-        writefile(CFG_DIR .. "/" .. name .. ".json", HttpService:JSONEncode(data))
+    pcall(function()
+        data._custom = {customModel = {on = cm.on, sel = cm.sel, size = cm.size},
+            gunModel = {on = gm.on, sel = gm.sel, size = gm.size, rot = gm.rot}, assets = {}}
+        for k, v in pairs(assetCache) do
+            if type(k) == "string" and (k:sub(1, 6) == "model:" or k:sub(1, 6) == "sound:") then data._custom.assets[k] = v end
+        end
     end)
-    if ok then activeCfg = name end
-    notify(ok and ("Сохранено: " .. name) or "Ошибка сохранения")
+    -- В конфиг записывается имя и положение каждого существующего бинда.
+    pcall(function() if X.collectUI then data._ui = X.collectUI() end end)
+    local okE, raw = pcall(function() return HttpService:JSONEncode(data) end)
+    if not okE then
+        -- что-то не кодируется в JSON: убираем таблицы из настроек и пробуем снова
+        for k, v in pairs(data) do
+            if type(v) == "table" and k ~= "_ui" and k ~= "_custom" then data[k] = nil end
+        end
+        okE, raw = pcall(function() return HttpService:JSONEncode(data) end)
+    end
+    if not okE then
+        data._ui = nil
+        data._custom = nil
+        okE, raw = pcall(function() return HttpService:JSONEncode(data) end)
+    end
+    if not okE then notify("Конфиги: ошибка кодирования: " .. tostring(raw)) return false end
+    local okW, err = pcall(writefile, CFG_DIR .. "/" .. name .. ".json", raw)
+    if not okW then notify("Конфиги: ошибка записи: " .. tostring(err)) return false end
+    -- резервная копия: если конфиг удалят, его можно вернуть кнопкой "Восстановить"
+    pcall(function()
+        if not isfolder(CFG_DIR .. "/Backup") then makefolder(CFG_DIR .. "/Backup") end
+        writefile(CFG_DIR .. "/Backup/" .. name .. ".json", raw)
+    end)
+    activeCfg = name
+    notify("Конфиги: сохранено " .. name)
+    return true
 end
 local function cfgLoad(name)
     local ok, data = pcall(function()
@@ -4400,7 +4438,15 @@ local function cfgLoad(name)
     notify("Загружен: " .. name)
 end
 local function cfgDelete(name)
-    pcall(function() delfile(CFG_DIR .. "/" .. name .. ".json") end)
+    -- не стираем насовсем: копия уходит в Trash, оттуда конфиг можно вернуть
+    pcall(function()
+        local p = CFG_DIR .. "/" .. name .. ".json"
+        if isfile(p) then
+            if not isfolder(CFG_DIR .. "/Trash") then makefolder(CFG_DIR .. "/Trash") end
+            writefile(CFG_DIR .. "/Trash/" .. name .. "__" .. tostring(os.time()) .. ".json", readfile(p))
+            delfile(p)
+        end
+    end)
 end
 local function cfgRefresh()
     if not cfgHolder then return end
@@ -4413,7 +4459,7 @@ local function cfgRefresh()
         if not isfolder(CFG_DIR) then return end
         for _, f in ipairs(listfiles(CFG_DIR)) do
             local n = tostring(f):match("([^/\\]+)%.json$")
-            if n then table.insert(names, n) end
+            if n and not CFG_RESERVED[n] then table.insert(names, n) end
         end
     end)
     table.sort(names)
@@ -4440,6 +4486,64 @@ local function cfgRefresh()
             end},
         })
     end
+end
+-- Восстановление конфигов: ищет копии в LocalLibrary, Backup, Trash и в старых папках Maneware*
+local function cfgIsConfig(data)
+    if type(data) ~= "table" then return false end
+    if data._configName then return true end
+    for k in pairs(data) do
+        if type(k) == "string" and REG[k] then return true end
+    end
+    return false
+end
+local function cfgRestore(silent)
+    if not cfgSupported() or not isfile then
+        if not silent then notify("Конфиги: executor не поддерживает файлы") end
+        return 0
+    end
+    pcall(function() if not isfolder(CFG_DIR) then makefolder(CFG_DIR) end end)
+    local dirs, seen = {}, {}
+    local function addDir(d) if d and not seen[d] then seen[d] = true table.insert(dirs, d) end end
+    addDir(CFG_DIR .. "/LocalLibrary")
+    addDir(CFG_DIR .. "/Backup")
+    addDir(CFG_DIR .. "/Trash")
+    addDir(CFG_DIR .. "/Configs")
+    addDir(CFG_DIR .. "/configs")
+    addDir("Maneware")
+    addDir("ManewareConfigs")
+    addDir("Maneware_MM2")
+    addDir("ManewareMM2_Configs")
+    pcall(function()
+        for _, p in ipairs(listfiles("")) do
+            local nm = tostring(p):match("([^/\\]+)$") or ""
+            if nm:lower():find("manew", 1, true) and not nm:find("%.") and nm ~= CFG_DIR then addDir(tostring(p)) end
+        end
+    end)
+    local restored = 0
+    for _, d in ipairs(dirs) do
+        pcall(function()
+            if not isfolder(d) then return end
+            for _, path in ipairs(listfiles(d)) do
+                path = tostring(path)
+                local stem = path:match("([^/\\]+)%.json$")
+                if stem and not CFG_RESERVED[stem] then
+                    local okR, data = pcall(function() return HttpService:JSONDecode(readfile(path)) end)
+                    if okR and cfgIsConfig(data) then
+                        local nm = cleanName(tostring(data._configName or stem))
+                        if nm ~= "" and not CFG_RESERVED[nm] then
+                            local target = CFG_DIR .. "/" .. nm .. ".json"
+                            if not isfile(target) then
+                                local okW = pcall(writefile, target, HttpService:JSONEncode(data))
+                                if okW then restored += 1 end
+                            end
+                        end
+                    end
+                end
+            end
+        end)
+    end
+    if not silent then notify("Конфиги: восстановлено " .. restored) end
+    return restored
 end
 -- Онлайн-библиотека. Требует развернутый Cloudflare Worker URL; сам Delta сервером не является.
 local onlineApiBox = t9.TextBox("URL онлайн-сервера Cloudflare Worker")
@@ -4513,9 +4617,24 @@ t9.Button("💾 Сохранить в открытый конфиг", function()
     cfgSave(activeCfg)
 end)
 t9.Button("🔄 Обновить список", cfgRefresh)
+t9.Button("♻️ Восстановить удалённые конфиги", function()
+    cfgRestore(false)
+    cfgRefresh()
+end)
 t9.Section("📂 Сохранённые конфиги")
 cfgHolder = t9.Holder()
 cfgRefresh()
+-- один раз при первом запуске v11.11: вернуть конфиги из копий
+pcall(function()
+    if cfgSupported() and isfile and not isfile(CFG_DIR .. "/restored_v1.txt") then
+        local n = cfgRestore(true)
+        writefile(CFG_DIR .. "/restored_v1.txt", tostring(n))
+        if n > 0 then
+            cfgRefresh()
+            notify("Конфиги: восстановлено " .. n)
+        end
+    end
+end)
 
 -- Локальная библиотека конфигов. Она общая только для файлов на этом устройстве;
 -- для реального обмена между разными пользователями нужен внешний сервер/API.
