@@ -1,4 +1,4 @@
--- Maneware MM2 v11.11 | Loader с диагностикой (Delta, телефон)
+-- Maneware MM2 v11.12 | Loader с диагностикой (Delta, телефон)
 -- Если меню не появилось, на экране будет красная плашка с текстом ошибки.
 local SRC = [==[-- Maneware MM2 v11 | Mobile (Delta)
 -- v11.10: GUI fix for Delta 2.743.1136 (gethui -> CoreGui -> PlayerGui, watchdog, probe)
@@ -780,81 +780,151 @@ flyBtn("▼", -170, function(v) flyDown = v end)
 --------------------------------------------------
 -- TARGET ESP / CHINA HAT
 --------------------------------------------------
+-- Настройки Target ESP
+-- reticle = рамка, circle = круг от макушки до ступней, circleStyle: 1 свечение / 2 тонкий / 3 заливка
+local tgt = {glow = true, size = 0.5, speed = 1.0, glowStr = 1.0,
+    reticle = true, circle = false, circleStyle = 1, circleSize = 1.0, ringBB = nil}
+local tgtAlpha = 0 -- общая плавность: 0 = скрыто, 1 = полностью видно
+
 local function removeTarget()
     if targetConn then targetConn:Disconnect() targetConn = nil end
     if targetObj then targetObj:Destroy() targetObj = nil end
+    if tgt.ringBB then tgt.ringBB:Destroy() tgt.ringBB = nil end
+    tgtAlpha = 0
 end
 
--- Настройки Target ESP (glow, размер, скорость вращения)
-local tgt = {glow = true, size = 0.5, speed = 1.0, glowStr = 1.0}
+-- Плавное появление/затухание: у каждого элемента запоминаем базовую прозрачность,
+-- дальше считаем итог = 1 - непрозрачность * alpha (свечение ещё умножается на силу и пульс)
+local function fadeApply(list, a, gs, pulse)
+    for _, it in ipairs(list) do
+        if it.obj.Parent then
+            local op = 1 - it.base
+            if it.glow then op = math.clamp(op * gs * pulse, 0, 0.95) end
+            it.obj[it.prop] = 1 - op * a
+        end
+    end
+end
 
--- Плоская рамка из 4 красных уголков + яркое свечение
+-- Рамка из уголков + мягкое многослойное свечение
 local function buildReticle()
+    local fade = {}
+    local function reg(obj, prop, isGlow)
+        table.insert(fade, {obj = obj, prop = prop, base = obj[prop], glow = isGlow})
+    end
     local bb = new("BillboardGui", {Name = "MWTargetBB", Size = UDim2.new(3, 0, 3, 0), AlwaysOnTop = true,
         LightInfluence = 0, Enabled = false})
     local spin = new("Frame", {Size = UDim2.new(1, 0, 1, 0), BackgroundTransparency = 1, Rotation = 25}, bb)
     local glow = new("Frame", {Name = "Glow", Size = UDim2.new(1, 0, 1, 0), BackgroundTransparency = 1}, spin)
     local lines = {}
-    local function corners(parent, color, base, transp, len)
+    local function corners(parent, color, base, transp, len, isGlow)
         for _, a in ipairs({Vector2.new(0, 0), Vector2.new(1, 0), Vector2.new(0, 1), Vector2.new(1, 1)}) do
             local hz = new("Frame", {Size = UDim2.new(len, 0, 0, base), Position = UDim2.new(a.X, 0, a.Y, 0), AnchorPoint = a,
                 BackgroundColor3 = color, BackgroundTransparency = transp, BorderSizePixel = 0}, parent)
             local vt = new("Frame", {Size = UDim2.new(0, base, len, 0), Position = UDim2.new(a.X, 0, a.Y, 0), AnchorPoint = a,
                 BackgroundColor3 = color, BackgroundTransparency = transp, BorderSizePixel = 0}, parent)
+            reg(hz, "BackgroundTransparency", isGlow)
+            reg(vt, "BackgroundTransparency", isGlow)
             table.insert(lines, {hz, true, base, len})
             table.insert(lines, {vt, false, base, len})
         end
     end
-    -- Яркое многослойное свечение
-    local haloOuter = new("Frame", {Size = UDim2.new(1, 18, 1, 18), Position = UDim2.new(0, -9, 0, -9),
-        BackgroundColor3 = Color3.fromRGB(255, 20, 60), BackgroundTransparency = 0.92, BorderSizePixel = 0}, glow)
-    corner(12, haloOuter)
-    new("UIStroke", {Color = Color3.fromRGB(255, 40, 80), Thickness = 8, Transparency = 0.65}, haloOuter)
-    local halo = new("Frame", {Size = UDim2.new(1, 8, 1, 8), Position = UDim2.new(0, -4, 0, -4),
-        BackgroundColor3 = Color3.fromRGB(255, 40, 80), BackgroundTransparency = 0.78, BorderSizePixel = 0}, glow)
-    corner(8, halo)
-    new("UIStroke", {Color = Color3.fromRGB(255, 80, 120), Thickness = 4, Transparency = 0.35}, halo)
+    -- свечение: 7 колец, чем дальше от рамки, тем слабее (плавный градиент)
+    local glowCol = Color3.fromRGB(255, 50, 90)
+    for i = 7, 1, -1 do
+        local f = new("Frame", {Size = UDim2.new(1, i * 2, 1, i * 2), Position = UDim2.new(0, -i, 0, -i),
+            BackgroundTransparency = 1, BorderSizePixel = 0}, glow)
+        corner(6 + i * 2, f)
+        local st = new("UIStroke", {Color = glowCol, Thickness = 3, Transparency = 0.5 + i * 0.07}, f)
+        reg(st, "Transparency", true)
+    end
     local core = new("Frame", {Size = UDim2.new(1, 0, 1, 0),
-        BackgroundColor3 = Color3.fromRGB(255, 60, 100), BackgroundTransparency = 0.88, BorderSizePixel = 0}, glow)
+        BackgroundColor3 = Color3.fromRGB(255, 60, 100), BackgroundTransparency = 0.9, BorderSizePixel = 0}, glow)
     corner(6, core)
-    corners(glow, Color3.fromRGB(255, 50, 90), 12, 0.45, 0.42)
-    corners(spin, Color3.fromRGB(255, 90, 120), 3, 0, 0.36)
-    return bb, spin, glow, lines
+    reg(core, "BackgroundTransparency", true)
+    corners(glow, Color3.fromRGB(255, 50, 90), 12, 0.55, 0.42, true)
+    corners(spin, Color3.fromRGB(255, 90, 120), 3, 0, 0.36, false)
+    return bb, spin, glow, lines, fade
+end
+
+-- Круг: диаметр = от макушки головы до ступней. Работает без Drawing, поэтому подходит любому инжектору.
+local function buildRing()
+    local fade, glowFrames = {}, {}
+    local function reg(obj, prop, isGlow)
+        local it = {obj = obj, prop = prop, base = obj[prop], glow = isGlow}
+        table.insert(fade, it)
+        return it
+    end
+    local col = Color3.fromRGB(255, 60, 100)
+    local bb = new("BillboardGui", {Name = "MWTargetRing", Size = UDim2.new(5, 0, 5, 0), AlwaysOnTop = true,
+        LightInfluence = 0, Enabled = false})
+    local root = new("Frame", {Size = UDim2.new(1, 0, 1, 0), BackgroundTransparency = 1}, bb)
+    local fill = new("Frame", {Name = "Fill", Size = UDim2.new(1, 0, 1, 0), BackgroundColor3 = col,
+        BackgroundTransparency = 0.93, BorderSizePixel = 0}, root)
+    corner(9999, fill)
+    local fillItem = reg(fill, "BackgroundTransparency", true)
+    -- от широкого и слабого к тонкому и яркому: получается мягкое свечение
+    local thick = {26, 19, 13, 8, 4}
+    local transp = {0.965, 0.93, 0.87, 0.75, 0.5}
+    for i = 1, #thick do
+        local f = new("Frame", {Size = UDim2.new(1, 0, 1, 0), BackgroundTransparency = 1, BorderSizePixel = 0}, root)
+        corner(9999, f)
+        local st = new("UIStroke", {Color = col, Thickness = thick[i], Transparency = transp[i]}, f)
+        reg(st, "Transparency", true)
+        table.insert(glowFrames, f)
+    end
+    -- чёткое кольцо поверх свечения
+    local ring = new("Frame", {Size = UDim2.new(1, 0, 1, 0), BackgroundTransparency = 1, BorderSizePixel = 0}, root)
+    corner(9999, ring)
+    local rst = new("UIStroke", {Color = Color3.fromRGB(255, 110, 140), Thickness = 2.5, Transparency = 0}, ring)
+    reg(rst, "Transparency", false)
+    return bb, fade, fillItem, glowFrames
 end
 
 local function applyTarget()
     removeTarget()
     if not targetEspEnabled then return end
-    local bb, spin, glow, lines = buildReticle()
+    local bb, spin, glow, lines, fade = buildReticle()
+    local rb, ringFade, fillItem, glowFrames = buildRing()
     targetObj = bb
-    local angle = 25
+    tgt.ringBB = rb
+    local angle, tt = 25, 0
+    local last = nil            -- последний корень цели: по нему свечение плавно гаснет
+    local ringH, ringOff = 5, 0 -- рост цели и смещение центра круга от корня
     targetConn = RunService.RenderStepped:Connect(function(dt)
         if not targetEspEnabled then removeTarget() return end
+        tt = tt + dt
+        local cam = workspace.CurrentCamera or Camera
         local pl = isGameActive() and findByRole("Murderer", true) or nil
         local ch = pl and pl.Character
         local r = ch and ch:FindFirstChild("HumanoidRootPart")
         local h = ch and ch:FindFirstChildOfClass("Humanoid")
-        if r and h and h.Health > 0 then
-            if bb.Parent ~= r then bb.Parent = r end
-            bb.Adornee = r
+        local alive = (r and h and h.Health > 0) and true or false
+        if alive then last = r end
+
+        -- плавный вход и уход
+        tgtAlpha = tgtAlpha + ((alive and 1 or 0) - tgtAlpha) * math.clamp(dt * 7, 0, 1)
+        if not alive and tgtAlpha < 0.01 then tgtAlpha = 0 end
+
+        local root = alive and r or last
+        if root and not root.Parent then root = nil last = nil end
+        if not root or tgtAlpha <= 0 then
+            bb.Enabled = false
+            rb.Enabled = false
+            return
+        end
+
+        local gs = math.clamp(tgt.glowStr or 1, 0.3, 2)
+        local pulse = 1 + 0.12 * math.sin(tt * 3)
+
+        -- Рамка
+        if tgt.reticle then
+            if bb.Parent ~= cam then bb.Parent = cam end
+            bb.Adornee = root
             local sz = 6 * tgt.size
             bb.Size = UDim2.new(sz, 0, sz, 0)
             glow.Visible = tgt.glow
-            -- Сила свечения
-            if tgt.glow then
-                local gs = math.clamp(tgt.glowStr or 1, 0.3, 2)
-                for _, ch in ipairs(glow:GetChildren()) do
-                    if ch:IsA("Frame") then
-                        local baseT = ch:GetAttribute("BaseT")
-                        if not baseT then
-                            baseT = ch.BackgroundTransparency
-                            ch:SetAttribute("BaseT", baseT)
-                        end
-                        ch.BackgroundTransparency = math.clamp(baseT / gs, 0.2, 0.98)
-                    end
-                end
-            end
-            local dist = (r.Position - Camera.CFrame.Position).Magnitude
+            fadeApply(fade, tgtAlpha, gs, pulse)
+            local dist = (root.Position - cam.CFrame.Position).Magnitude
             local k = math.clamp((22 / math.max(dist, 8)) ^ 0.5, 0.5, 1.2)
             for _, ln in ipairs(lines) do
                 local th = math.max(1, ln[3] * k)
@@ -869,6 +939,34 @@ local function applyTarget()
             spin.Rotation = angle % 360
         else
             bb.Enabled = false
+        end
+
+        -- Круг от макушки до ступней
+        if tgt.circle then
+            if alive then
+                local head = ch:FindFirstChild("Head")
+                if head then
+                    local top = head.Position.Y + head.Size.Y / 2
+                    local feet = r.Position.Y - r.Size.Y / 2
+                        - (h.RigType == Enum.HumanoidRigType.R15 and h.HipHeight or 2)
+                    ringH = math.max(top - feet, 2)
+                    ringOff = (top + feet) / 2 - r.Position.Y
+                end
+            end
+            local d = ringH * tgt.circleSize
+            if rb.Parent ~= cam then rb.Parent = cam end
+            rb.Adornee = root
+            rb.Size = UDim2.new(d, 0, d, 0)
+            rb.StudsOffsetWorldSpace = Vector3.new(0, ringOff * tgt.circleSize, 0)
+            -- стили: 1 свечение, 2 тонкий круг, 3 заливка
+            local st = tgt.circleStyle
+            for _, f in ipairs(glowFrames) do f.Visible = st ~= 2 end
+            fillItem.obj.Visible = st ~= 2
+            fillItem.base = (st == 3) and 0.8 or 0.93
+            fadeApply(ringFade, tgtAlpha, gs, pulse)
+            rb.Enabled = true
+        else
+            rb.Enabled = false
         end
     end)
 end
@@ -3864,6 +3962,10 @@ t2.Toggle("Target: Glow (свечение)", true, function(v) tgt.glow = v end,
 t2.Slider("Target: Size", 0.10, 1, 0.5, "", function(v) tgt.size = v end, 0.05)
 t2.Slider("Target: Speed", 0.50, 2, 1.00, "x", function(v) tgt.speed = v end, 0.05)
 t2.Slider("Target: Glow Strength", 0.3, 2, 1, "x", function(v) tgt.glowStr = v end, 0.1)
+t2.Toggle("Target: Рамка", true, function(v) tgt.reticle = v end, ICONS.TARGET)
+t2.ToggleDrop("Target: Круг (голова → ноги)", false, function(v) tgt.circle = v end, ICONS.TARGET,
+    {"Свечение", "Тонкий круг", "Заливка"}, 1, function(i) tgt.circleStyle = i end)
+t2.Slider("Target: Размер круга", 0.6, 1.6, 1, "x", function(v) tgt.circleSize = v end, 0.05)
 t2.Toggle("China Hat", false, function(v)
     hatEnabled = v
     if v then applyHat(myChar()) else removeHat() end
