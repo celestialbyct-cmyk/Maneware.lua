@@ -1,4 +1,4 @@
--- Maneware MM2 v11.12 | Loader с диагностикой (Delta, телефон)
+-- Maneware MM2 v11.14 | Loader с диагностикой (Delta, телефон)
 -- Если меню не появилось, на экране будет красная плашка с текстом ошибки.
 local SRC = [==[-- Maneware MM2 v11 | Mobile (Delta)
 -- v11.10: GUI fix for Delta 2.743.1136 (gethui -> CoreGui -> PlayerGui, watchdog, probe)
@@ -188,7 +188,7 @@ local function addRow(holder, order, label, actions)
         local a = actions[idx]
         local w = a.w or 76
         local b = new("TextButton", {Size = UDim2.new(0, w, 0, 32), Position = UDim2.new(1, -(right + w), 0.5, -16),
-            BackgroundColor3 = a.color or C.ACCENT, Text = a.text, TextColor3 = C.TEXT, TextSize = 12,
+            BackgroundColor3 = a.color or C.ACCENT, Text = a.text, TextColor3 = C.TEXT, TextSize = a.size or 12,
             Font = Enum.Font.GothamBold, BorderSizePixel = 0}, row)
         corner(8, b)
         onTap(b, function() task.spawn(a.fn) end)
@@ -846,50 +846,46 @@ local function buildReticle()
     return bb, spin, glow, lines, fade
 end
 
--- Круг: диаметр = от макушки головы до ступней. Работает без Drawing, поэтому подходит любому инжектору.
+-- Нимб: горизонтальное кольцо (как halo) летает от ступней до макушки и обратно.
+-- Работает без Drawing: CylinderHandleAdornment с InnerRadius, привязан к Terrain (мировые координаты).
 local function buildRing()
-    local fade, glowFrames = {}, {}
+    local fade, items = {}, {}
     local function reg(obj, prop, isGlow)
         local it = {obj = obj, prop = prop, base = obj[prop], glow = isGlow}
         table.insert(fade, it)
         return it
     end
-    local col = Color3.fromRGB(255, 60, 100)
-    local bb = new("BillboardGui", {Name = "MWTargetRing", Size = UDim2.new(5, 0, 5, 0), AlwaysOnTop = true,
-        LightInfluence = 0, Enabled = false})
-    local root = new("Frame", {Size = UDim2.new(1, 0, 1, 0), BackgroundTransparency = 1}, bb)
-    local fill = new("Frame", {Name = "Fill", Size = UDim2.new(1, 0, 1, 0), BackgroundColor3 = col,
-        BackgroundTransparency = 0.93, BorderSizePixel = 0}, root)
-    corner(9999, fill)
-    local fillItem = reg(fill, "BackgroundTransparency", true)
-    -- от широкого и слабого к тонкому и яркому: получается мягкое свечение
-    local thick = {26, 19, 13, 8, 4}
-    local transp = {0.965, 0.93, 0.87, 0.75, 0.5}
-    for i = 1, #thick do
-        local f = new("Frame", {Size = UDim2.new(1, 0, 1, 0), BackgroundTransparency = 1, BorderSizePixel = 0}, root)
-        corner(9999, f)
-        local st = new("UIStroke", {Color = col, Thickness = thick[i], Transparency = transp[i]}, f)
-        reg(st, "Transparency", true)
-        table.insert(glowFrames, f)
+    local rb = Instance.new("Folder")
+    rb.Name = "MWTargetRing"
+    local function mk(kind, w, transp, lag, isGlow, col)
+        local a = new("CylinderHandleAdornment", {Adornee = workspace.Terrain, Radius = 1.7, InnerRadius = 1.6,
+            Height = 0.06, Angle = 360, Color3 = col or Color3.fromRGB(255, 60, 100), Transparency = transp,
+            AlwaysOnTop = true, ZIndex = 1}, rb)
+        local it = reg(a, "Transparency", isGlow)
+        local rec = {a = a, kind = kind, w = w, lag = lag, it = it}
+        table.insert(items, rec)
+        return rec
     end
-    -- чёткое кольцо поверх свечения
-    local ring = new("Frame", {Size = UDim2.new(1, 0, 1, 0), BackgroundTransparency = 1, BorderSizePixel = 0}, root)
-    corner(9999, ring)
-    local rst = new("UIStroke", {Color = Color3.fromRGB(255, 110, 140), Thickness = 2.5, Transparency = 0}, ring)
-    reg(rst, "Transparency", false)
-    return bb, fade, fillItem, glowFrames
+    local fill = mk("fill", 0, 0.93, 0, true)
+    mk("glow", 1.4, 0.95, 0, true)
+    mk("glow", 0.9, 0.9, 0, true)
+    mk("glow", 0.5, 0.8, 0, true)
+    mk("echo", 0.14, 0.7, 0.10, true)
+    mk("echo", 0.14, 0.85, 0.20, true)
+    mk("core", 0.14, 0, 0, false, Color3.fromRGB(255, 110, 140))
+    return rb, fade, fill, items
 end
 
 local function applyTarget()
     removeTarget()
     if not targetEspEnabled then return end
     local bb, spin, glow, lines, fade = buildReticle()
-    local rb, ringFade, fillItem, glowFrames = buildRing()
+    local rb, ringFade, fillRec, ringItems = buildRing()
     targetObj = bb
     tgt.ringBB = rb
     local angle, tt = 25, 0
     local last = nil            -- последний корень цели: по нему свечение плавно гаснет
-    local ringH, ringOff = 5, 0 -- рост цели и смещение центра круга от корня
+    local ringFeet, ringTop = nil, nil -- мировая высота ступней и макушки цели
     targetConn = RunService.RenderStepped:Connect(function(dt)
         if not targetEspEnabled then removeTarget() return end
         tt = tt + dt
@@ -909,7 +905,7 @@ local function applyTarget()
         if root and not root.Parent then root = nil last = nil end
         if not root or tgtAlpha <= 0 then
             bb.Enabled = false
-            rb.Enabled = false
+            rb.Parent = nil
             return
         end
 
@@ -941,32 +937,47 @@ local function applyTarget()
             bb.Enabled = false
         end
 
-        -- Круг от макушки до ступней
+        -- Нимб: кольцо летает от ступней до макушки
         if tgt.circle then
             if alive then
                 local head = ch:FindFirstChild("Head")
                 if head then
-                    local top = head.Position.Y + head.Size.Y / 2
-                    local feet = r.Position.Y - r.Size.Y / 2
+                    ringTop = head.Position.Y + head.Size.Y / 2
+                    ringFeet = r.Position.Y - r.Size.Y / 2
                         - (h.RigType == Enum.HumanoidRigType.R15 and h.HipHeight or 2)
-                    ringH = math.max(top - feet, 2)
-                    ringOff = (top + feet) / 2 - r.Position.Y
                 end
             end
-            local d = ringH * tgt.circleSize
-            if rb.Parent ~= cam then rb.Parent = cam end
-            rb.Adornee = root
-            rb.Size = UDim2.new(d, 0, d, 0)
-            rb.StudsOffsetWorldSpace = Vector3.new(0, ringOff * tgt.circleSize, 0)
-            -- стили: 1 свечение, 2 тонкий круг, 3 заливка
+            if not ringTop then
+                ringTop = root.Position.Y + 2.8
+                ringFeet = root.Position.Y - 3
+            end
+            local R = 1.7 * tgt.circleSize
+            local sp = (tgt.speed or 1) * 1.6
             local st = tgt.circleStyle
-            for _, f in ipairs(glowFrames) do f.Visible = st ~= 2 end
-            fillItem.obj.Visible = st ~= 2
-            fillItem.base = (st == 3) and 0.8 or 0.93
+            if rb.Parent ~= cam then rb.Parent = cam end
+            for _, rec in ipairs(ringItems) do
+                local k = 0.5 - 0.5 * math.cos((tt - rec.lag) * sp) -- 0 ступни -> 1 макушка (плавно туда-обратно)
+                local y = ringFeet + (ringTop - ringFeet) * k
+                local a = rec.a
+                local show = true
+                if st == 2 then show = (rec.kind == "core")
+                elseif rec.kind == "fill" then show = true end
+                a.Visible = show
+                if rec.kind == "fill" then
+                    a.Radius = R
+                    a.InnerRadius = 0
+                    a.Height = 0.04
+                    rec.it.base = (st == 3) and 0.8 or 0.93
+                else
+                    a.Radius = R + rec.w / 2
+                    a.InnerRadius = math.max(R - rec.w / 2, 0)
+                    a.Height = (rec.kind == "core") and 0.07 or 0.05
+                end
+                a.CFrame = CFrame.new(root.Position.X, y, root.Position.Z) * CFrame.Angles(math.rad(90), 0, 0)
+            end
             fadeApply(ringFade, tgtAlpha, gs, pulse)
-            rb.Enabled = true
         else
-            rb.Enabled = false
+            rb.Parent = nil
         end
     end)
 end
@@ -3963,9 +3974,9 @@ t2.Slider("Target: Size", 0.10, 1, 0.5, "", function(v) tgt.size = v end, 0.05)
 t2.Slider("Target: Speed", 0.50, 2, 1.00, "x", function(v) tgt.speed = v end, 0.05)
 t2.Slider("Target: Glow Strength", 0.3, 2, 1, "x", function(v) tgt.glowStr = v end, 0.1)
 t2.Toggle("Target: Рамка", true, function(v) tgt.reticle = v end, ICONS.TARGET)
-t2.ToggleDrop("Target: Круг (голова → ноги)", false, function(v) tgt.circle = v end, ICONS.TARGET,
-    {"Свечение", "Тонкий круг", "Заливка"}, 1, function(i) tgt.circleStyle = i end)
-t2.Slider("Target: Размер круга", 0.6, 1.6, 1, "x", function(v) tgt.circleSize = v end, 0.05)
+t2.ToggleDrop("Target: Нимб (ноги → голова)", false, function(v) tgt.circle = v end, ICONS.TARGET,
+    {"Свечение", "Тонкий нимб", "Заливка"}, 1, function(i) tgt.circleStyle = i end)
+t2.Slider("Target: Размер нимба", 0.6, 1.6, 1, "x", function(v) tgt.circleSize = v end, 0.05)
 t2.Toggle("China Hat", false, function(v)
     hatEnabled = v
     if v then applyHat(myChar()) else removeHat() end
@@ -4995,8 +5006,30 @@ makeDraggable(X.kfRoot, function() return EDIT.mode == "kf" end)
 local bindGui = makeGui("ManewareBinds", 99997)
 local bindButtons = {}
 
+-- Keybinds (ПК): клавиши и панель снизу слева
+local pcKeys = {} -- имя функции -> английская буква клавиши
+local isPC = UIS.KeyboardEnabled
+local kbSig = ""
+local kbGui = makeGui("ManewareKeybinds", 99995)
+local kbRoot = new("Frame", {Name = "KB", Size = UDim2.new(0, 190, 0, 0), AutomaticSize = Enum.AutomaticSize.Y,
+    BackgroundTransparency = 1, Active = false, Visible = false, AnchorPoint = Vector2.new(0, 1),
+    Position = UDim2.new(0, 14, 1, -14)}, kbGui)
+new("UIListLayout", {SortOrder = Enum.SortOrder.LayoutOrder, Padding = UDim.new(0, 2)}, kbRoot)
+if uiData.kbp then pcall(function() kbRoot.Position = tblToPos(uiData.kbp) end) end
+if type(uiData.pc) == "table" then
+    for n, k in pairs(uiData.pc) do
+        if type(k) == "string" and k:match("^%a$") then pcKeys[n] = k:upper() end
+    end
+end
+local function copyPc()
+    local t = {}
+    for n, k in pairs(pcKeys) do t[n] = k end
+    return t
+end
+makeDraggable(kbRoot, function() return EDIT.mode == "kb" end)
+
 local function saveUI()
-    local d = {fab = posToTbl(fab.Position), wm = posToTbl(wmRoot.Position), kf = posToTbl(X.kfRoot.Position), binds = {}}
+    local d = {fab = posToTbl(fab.Position), wm = posToTbl(wmRoot.Position), kf = posToTbl(X.kfRoot.Position), kbp = posToTbl(kbRoot.Position), pc = copyPc(), binds = {}}
     for name, b in pairs(bindButtons) do d.binds[name] = posToTbl(b.Position) end
     uiData = d
     writeJson("ui.json", d)
@@ -5006,7 +5039,7 @@ local createBind -- объявляем заранее: X.applyUI ниже выз
 
 -- для конфигов: сохраняем/загружаем позиции FAB, watermark, killfeed, биндов
 X.collectUI = function()
-    local d = {fab = posToTbl(fab.Position), wm = posToTbl(wmRoot.Position), kf = posToTbl(X.kfRoot.Position), binds = {}}
+    local d = {fab = posToTbl(fab.Position), wm = posToTbl(wmRoot.Position), kf = posToTbl(X.kfRoot.Position), kbp = posToTbl(kbRoot.Position), pc = copyPc(), binds = {}}
     for name, b in pairs(bindButtons) do d.binds[name] = posToTbl(b.Position) end
     return d
 end
@@ -5015,6 +5048,14 @@ X.applyUI = function(d)
     if d.fab then pcall(function() fab.Position = tblToPos(d.fab) end) end
     if d.wm then pcall(function() wmRoot.Position = tblToPos(d.wm) end) end
     if d.kf then pcall(function() X.kfRoot.Position = tblToPos(d.kf) end) end
+    if d.kbp then pcall(function() kbRoot.Position = tblToPos(d.kbp) end) end
+    if type(d.pc) == "table" then
+        for k in pairs(pcKeys) do pcKeys[k] = nil end
+        for n, k in pairs(d.pc) do
+            if type(k) == "string" and k:match("^%a$") then pcKeys[n] = k:upper() end
+        end
+        kbSig = ""
+    end
     if type(d.binds) == "table" then
         for name, t in pairs(d.binds) do
             if bindButtons[name] then
@@ -5067,10 +5108,15 @@ end
 
 local function deleteBind(name)
     local b = bindButtons[name]
+    local had = (b ~= nil) or (pcKeys[name] ~= nil)
     if b then
         b:Destroy()
         bindButtons[name] = nil
         bindStates[name] = nil
+    end
+    pcKeys[name] = nil
+    kbSig = ""
+    if had then
         saveUI()
         notify("Бинды: бинд удалён")
     else
@@ -5107,7 +5153,7 @@ new("TextLabel", {Size = UDim2.new(1, -40, 0, 60), Position = UDim2.new(0, 20, 0
     TextColor3 = C.TEXT, TextSize = 15, Font = Enum.Font.GothamBold, TextWrapped = true}, catcher)
 
 local function editBox(obj, on)
-    if obj == X.kfRoot or obj == wmRoot then obj.Active = on and true or false end -- ловит нажатия только в режиме редактирования
+    if obj == X.kfRoot or obj == wmRoot or obj == kbRoot then obj.Active = on and true or false end -- ловит нажатия только в режиме редактирования
     local b = obj:FindFirstChild("MWEditBox")
     if on and not b then
         b = new("Frame", {Name = "MWEditBox", Size = UDim2.new(1, 8, 1, 8), Position = UDim2.new(0, -4, 0, -4),
@@ -5122,12 +5168,14 @@ local function clearBoxes()
     editBox(fab, false)
     editBox(wmRoot, false)
     editBox(X.kfRoot, false)
+    editBox(kbRoot, false)
     for _, b in pairs(bindButtons) do editBox(b, false) end
 end
 
 local function exitEdit()
     if not EDIT.mode then return end
     EDIT.mode = nil
+    kbSig = ""
     clearBoxes()
     catcher.Visible = false
     saveUI()
@@ -5155,6 +5203,9 @@ local function enterEdit(mode)
         editBox(wmRoot, true)
     elseif mode == "kf" then
         editBox(X.kfRoot, true)
+    elseif mode == "kb" then
+        kbSig = ""
+        editBox(kbRoot, true)
     else
         for _, b in pairs(bindButtons) do editBox(b, true) end
     end
@@ -5179,6 +5230,7 @@ local tb = addTab("Binds", ICONS.UTIL, 1000)
 addSideButton("✎ Кнопка меню", ICONS.MENU, 1001, function() enterEdit("fab") end)
 addSideButton("✎ Watermark", ICONS.EYE, 1002, function() enterEdit("wm") end)
 addSideButton("✎ Binds", ICONS.UTIL, 1003, function() enterEdit("binds") end)
+addSideButton("✎ Keybinds", ICONS.UTIL, 1005, function() enterEdit("kb") end)
 
 local tkf = addTab("KillFeed", ICONS.TARGET, 1004)
 tkf.Section("☠ KillFeed")
@@ -5188,7 +5240,7 @@ tkf.Toggle("Hide Innocent (убит невиновный)", true, function(v) X.
 tkf.Toggle("Hide Murder (убит убийца)", true, function(v) X.kf.hideMur = v end, ICONS.EYE)
 tkf.Toggle("Hide Sheriff (убит шериф)", true, function(v) X.kf.hideShe = v end, ICONS.EYE)
 
-tb.Section("🎛 Binds: кнопка на экране для функции или действия")
+tb.Section("🎛 Bind Tel: кнопка на экране • Bind PC: нажми и затем английскую клавишу")
 local bindHolder = tb.Holder()
 local bindNames = {}
 for name, e in pairs(REG) do
@@ -5198,10 +5250,19 @@ for name in pairs(ACT) do
     if not (name:find("🔄") or name:find("💾") or name:find("✔") or name:find("✎")) then bindNames[#bindNames + 1] = name end
 end
 table.sort(bindNames)
+local pcListening = nil -- {name = ..., btn = ...}
+local function pcStopListen()
+    if pcListening then
+        local btn = pcListening.btn
+        pcListening = nil
+        pcall(function() btn.Text = "Bind PC" end)
+    end
+end
 for i, name in ipairs(bindNames) do
-    addRow(bindHolder, i, name, {
-        {text = "Delete", color = C.RED, w = 52, fn = function() deleteBind(name) end},
-        {text = "Bind", color = C.ACCENT, w = 44, fn = function()
+    local row
+    row = addRow(bindHolder, i, name, {
+        {text = "Delete", color = C.RED, w = 44, size = 11, fn = function() deleteBind(name) end},
+        {text = "Bind Tel", color = C.ACCENT, w = 54, size = 11, fn = function()
             if createBind(name) then
                 saveUI()
                 notify("Бинды: создан, двигать через ✎ Binds")
@@ -5209,8 +5270,89 @@ for i, name in ipairs(bindNames) do
                 notify("Бинды: бинд уже есть")
             end
         end},
+        {text = "Bind PC", color = C.ACCENT, w = 54, size = 11, fn = function()
+            local btn
+            for _, ch in ipairs(row:GetChildren()) do
+                if ch:IsA("TextButton") and (ch.Text == "Bind PC" or ch.Text == "...") then btn = ch end
+            end
+            if not btn then return end
+            if pcListening and pcListening.btn == btn then pcStopListen() return end -- повторный тап = отмена
+            pcStopListen()
+            pcListening = {name = name, btn = btn}
+            btn.Text = "..."
+        end},
     })
 end
+
+-- ввод с клавиатуры: назначение клавиши (только английские буквы) и запуск функций
+UIS.InputBegan:Connect(function(i, gpe)
+    if i.UserInputType ~= Enum.UserInputType.Keyboard then return end
+    local kn = i.KeyCode.Name
+    if not kn:match("^%a$") then return end
+    if pcListening then
+        local nm = pcListening.name
+        for other, k in pairs(pcKeys) do
+            if k == kn and other ~= nm then pcKeys[other] = nil end
+        end
+        pcKeys[nm] = kn
+        pcStopListen()
+        kbSig = ""
+        saveUI()
+        notify("Бинды: " .. nm .. " → [" .. kn .. "]")
+        return
+    end
+    if gpe or EDIT.mode then return end
+    for name, k in pairs(pcKeys) do
+        if k == kn then
+            local run = bindInfo(name)
+            if run then pcall(run) end
+        end
+    end
+end)
+
+-- панель Keybinds (только ПК): тумблеры видны когда включены, действия - всегда
+local function kbRebuild(items)
+    for _, ch in ipairs(kbRoot:GetChildren()) do
+        if not ch:IsA("UIListLayout") and ch.Name ~= "MWEditBox" then ch:Destroy() end
+    end
+    local head = new("TextLabel", {Size = UDim2.new(1, 0, 0, 24), BackgroundColor3 = C.ACCENT, BorderSizePixel = 0,
+        Text = "Keybinds", TextColor3 = C.TEXT, TextSize = 13, Font = Enum.Font.GothamBold, LayoutOrder = 0}, kbRoot)
+    corner(6, head)
+    for idx, it in ipairs(items) do
+        local r = new("Frame", {Size = UDim2.new(1, 0, 0, 22), BackgroundColor3 = C.BG, BackgroundTransparency = 0.2,
+            BorderSizePixel = 0, LayoutOrder = idx}, kbRoot)
+        corner(5, r)
+        new("TextLabel", {Size = UDim2.new(1, -50, 1, 0), Position = UDim2.new(0, 8, 0, 0), BackgroundTransparency = 1,
+            Text = it[1], TextColor3 = C.TEXT, TextSize = 12, Font = Enum.Font.GothamSemibold,
+            TextXAlignment = Enum.TextXAlignment.Left, TextTruncate = Enum.TextTruncate.AtEnd}, r)
+        new("TextLabel", {Size = UDim2.new(0, 40, 1, 0), Position = UDim2.new(1, -46, 0, 0), BackgroundTransparency = 1,
+            Text = "[" .. it[2] .. "]", TextColor3 = C.TEXT, TextSize = 12, Font = Enum.Font.GothamBold,
+            TextXAlignment = Enum.TextXAlignment.Right}, r)
+    end
+end
+task.spawn(function()
+    while true do
+        task.wait(0.2)
+        pcall(function()
+            local items = {}
+            for name, key in pairs(pcKeys) do
+                local e = REG[name]
+                local show = true
+                if e and e.kind == "toggle" then show = e.get() and true or false end
+                if show then items[#items + 1] = {name, key} end
+            end
+            table.sort(items, function(a, b) return a[1] < b[1] end)
+            if #items == 0 and EDIT.mode == "kb" then items[1] = {"Kill All", "K"} end
+            local sig = ""
+            for _, it in ipairs(items) do sig = sig .. it[1] .. "|" .. it[2] .. "," end
+            kbRoot.Visible = (isPC or EDIT.mode == "kb") and #items > 0
+            if sig ~= kbSig then
+                kbSig = sig
+                kbRebuild(items)
+            end
+        end)
+    end
+end)
 
 if type(uiData.binds) == "table" then
     for name, t in pairs(uiData.binds) do pcall(createBind, name, tblToPos(t)) end
@@ -5329,7 +5471,7 @@ local function themeInst(inst, key, th)
     end
 end
 
-local THEME_ROOTS = {hubGui, toggleGui, bindGui}
+local THEME_ROOTS = {hubGui, toggleGui, bindGui, kbGui}
 
 local function scanTheme(th)
     for _, root in ipairs(THEME_ROOTS) do
